@@ -15,6 +15,7 @@ library(tidyverse)
 estimand_truths <- read_csv("Data/ACIC_estimand_truths.csv")
 
 ```
+
 ```{r, eval=FALSE, cache=TRUE, message=FALSE}
 # Load in curia estimates from separate tables. Expensive.
 curia_estimates <- dir("Data/curia") %>%
@@ -24,11 +25,13 @@ curia_estimates <- dir("Data/curia") %>%
 write_csv(curia_estimates, "Data/all_curia_estimates.csv")
 
 ```
+
 ```{r, message=FALSE}
 # Read in consolidated estimates cached from previous chunk
 curia_estimates <- read_csv("Data/all_curia_estimates.csv")
 
 ```
+
 ```{r, message=FALSE, cache=TRUE}
 # Read in the competition data to get practice-year-level data for weighted means
 n.patients.all <- dir("Data/track2_20220404/practice_year/", full.names = TRUE) %>% 
@@ -37,6 +40,7 @@ n.patients.all <- dir("Data/track2_20220404/practice_year/", full.names = TRUE) 
         mutate(dataset.num = str_match(basename(.x), '[0-9]+')[1,1])) %>% 
   list_rbind()
 ```
+
 ```{r, message=FALSE, cache=TRUE}
 # Read in the competition data to get practice-level data for weighted means
 practice_level <- dir("Data/track2_20220404/practice/", full.names = TRUE) %>% 
@@ -44,6 +48,7 @@ practice_level <- dir("Data/track2_20220404/practice/", full.names = TRUE) %>%
         mutate(dataset.num = str_match(basename(.x), '[0-9]+')[1,1])) %>% 
   list_rbind()
 ```
+
 ```{r, message=FALSE}
 # aggregate and summarize by all the variables
 n.patients.overall <- n.patients.all %>% 
@@ -135,11 +140,13 @@ Compare to ACIC winners:
 ```{r, cache=TRUE}
 acic_winners <- readRDS("Data/eval_simple_tosend.RDS")
 ```
+
 ```{r}
-evals_compare <- names(acic_winners) %>% 
+acic_winners_df <- names(acic_winners) %>% 
   #keep(~ grepl("^t2", .x)) %>% 
   map(~ acic_winners[[.x]]$eval %>% mutate(method = .x)) %>%
-  list_rbind() %>% 
+  list_rbind()
+evals_compare <- acic_winners_df %>% 
   select(-DGP_name) %>% 
   rbind(curia_eval.datasets %>% mutate(method = 'curia')) %>% 
   left_join(n.patients.combined, by = c("dataset.num", "variable", "id.practice", "level", "year")) %>% 
@@ -170,7 +177,7 @@ evals_compare %>%
                    rmse = caret::RMSE(satt, true), 
                    across(c(satt, true, bias, abs_bias, lower.90, upper.90, cover, width),
                           ~ weighted.mean(., n.patients))) %>%
-        write_csv("eval_compare.csv")
+        write_csv("Data/eval_compare.csv")
 ```
 
 ```{r}
@@ -191,7 +198,7 @@ map(c("rmse", "bias", "abs_bias", "cover", "width"), function(.x) {
     scale_color_manual(values = c(`TRUE`='darkblue', `FALSE`='lightgray')) +
     {if(.x %in% c("rmse")) scale_y_log10() else NULL} + 
     labs(title = .x)
-  ggsave(file = paste0("plot_", .x, "_by_subgroup_size.png"))
+  ggsave(file = paste0("Plots/plot_", .x, "_by_subgroup_size.png"))
 })
 
 ```

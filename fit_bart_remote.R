@@ -134,7 +134,8 @@ get_all_estimates <- function(pred.diff, .data) {
   # Because .data is masked in dplyr functions
   ..data <- .data
   
-  satt.overall <- posterior_estimate(pred.diff, ..data)
+  satt.overall <- posterior_estimate(pred.diff, ..data) %>% 
+    mutate(variable = "Overall")
   
   # We don't have a satt.yearly because we analyzed a wide dataset with no time
   # groups
@@ -151,18 +152,17 @@ get_all_estimates <- function(pred.diff, .data) {
         mutate(.idx = 1:nrow(..data)) %>% 
         # filter(variable == paste0("X", .x), level == .y)
         filter(!!sym(paste0("X", .x)) == .y)
-      browser()
       posterior_estimate(pred.diff[, ..data.sub$.idx], ..data.sub) %>% 
-        mutate(variable = paste0("X", .x), level = .y)
+        mutate(variable = paste0("X", .x), level = as.character(.y))
     })) 
   ))
   
-  return(rbind(satt.overall, satt.practice, satt.levels))
+  return(bind_rows(satt.overall, satt.levels, satt.practice))
   
 }
 
 
-# Run performance functions -----------------------------------------------#
+# Run performance functions -----------------------------------------------
 
 # Run the performance functions for BART
 pdep_draws.bart <- pdep(bart.fit, data.main)
@@ -173,7 +173,7 @@ pdep_draws.dart <- pdep(dart.fit, data.main)
 dart.ests <- get_all_estimates(pdep_draws.dart, data.main)
 
 
-# Output performance/pdep estimates ---------------------------------------
+# Output posterior draws and estimates ------------------------------------
 
 write_csv(pdep_draws.bart, sprintf(path_pdep, 'BART', dataset_name))
 write_csv(pdep_draws.dart, sprintf(path_pdep, 'DART', dataset_name))
