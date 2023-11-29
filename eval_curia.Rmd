@@ -1,0 +1,198 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Notebook to compare contractor results to true values.
+
+---
+
+Load in our ground truths and a sample data set from Curia.
+
+```{r message=FALSE}
+library(tidyverse)
+
+estimand_truths <- read_csv("Data/ACIC_estimand_truths.csv")
+
+```
+```{r, eval=FALSE, cache=TRUE, message=FALSE}
+# Load in curia estimates from separate tables. Expensive.
+curia_estimates <- dir("Data/curia") %>%
+  map(~ read_csv(file.path("Data", "curia", .))) %>%
+  list_rbind() %>%
+  mutate(dataset.num = sprintf("%04d", dataset.num))
+write_csv(curia_estimates, "Data/all_curia_estimates.csv")
+
+```
+```{r, message=FALSE}
+# Read in consolidated estimates cached from previous chunk
+curia_estimates <- read_csv("Data/all_curia_estimates.csv")
+
+```
+```{r, message=FALSE, cache=TRUE}
+# Read in the competition data to get practice-year-level data for weighted means
+n.patients.all <- dir("Data/track2_20220404/practice_year/", full.names = TRUE) %>% 
+  map(~ read_csv(.x) %>% 
+        select(id.practice, n.patients, year) %>% 
+        mutate(dataset.num = str_match(basename(.x), '[0-9]+')[1,1])) %>% 
+  list_rbind()
+```
+```{r, message=FALSE, cache=TRUE}
+# Read in the competition data to get practice-level data for weighted means
+practice_level <- dir("Data/track2_20220404/practice/", full.names = TRUE) %>% 
+  map(~ read_csv(.x) %>% 
+        mutate(dataset.num = str_match(basename(.x), '[0-9]+')[1,1])) %>% 
+  list_rbind()
+```
+```{r, message=FALSE}
+# aggregate and summarize by all the variables
+n.patients.overall <- n.patients.all %>% 
+  group_by(dataset.num) %>% 
+  summarize(n.patients = sum(n.patients), variable = "Overall")
+
+n.patients.by_practice <- n.patients.all %>% 
+  group_by(dataset.num, id.practice) %>% 
+  summarise(n.patients = sum(n.patients))
+
+n.patients.by_year <- n.patients.all %>% 
+  group_by(dataset.num, year) %>% 
+  summarise(n.patients = sum(n.patients), variable = "Overall")
+
+# Merge on practice level variables
+n.patients.practice_level <- n.patients.all %>% 
+  left_join(practice_level, by = c('id.practice', 'dataset.num'))
+
+# summarize by level of covariates
+n.patients.by_X <- map(1:5, function(i) {
+  n.patients.practice_level %>% 
+    group_by(dataset.num, !!sym(paste0("X", i))) %>% 
+    pivot_longer(cols = c(!!sym(paste0("X", i))), names_to = 'variable', values_to = 'level') %>% 
+    mutate(level = as.character(level)) %>% 
+    select(id.practice, n.patients, year, dataset.num, variable, level)
+}) %>% 
+  list_rbind() %>% 
+  group_by(dataset.num, variable, level) %>% 
+  summarise(n.patients = sum(n.patients))
+
+# Create one dataframe to merge
+n.patients.combined <- bind_rows(n.patients.overall, n.patients.by_practice, 
+                                 n.patients.by_X, n.patients.by_year)
+```
+
+Now merge the ground truths, the curia data, and the practice data
+
+```{r}
+# Join the two data sets
+combined_ests <- curia_estimates %>% 
+  left_join(estimand_truths, 
+            by = c("dataset.num", "variable", "level", "year", "id.practice"),
+            suffix = c(".curia", "")) %>% 
+  select(!ends_with(".curia")) %>% 
+  # Replace inner_join with left_join when running full scale on all dataset.num
+  inner_join(n.patients.combined, by = c("dataset.num", "variable", "level", "year", "id.practice"))
+
+```
+
+```{r, eval=FALSE}
+# Check performance averaged across datasets
+curia_eval.collapsed <- combined_ests %>% 
+  mutate(bias = SATT - model_satt,
+         abs_bias = abs(bias),
+         coverage = abs_bias / model_se < qnorm(.95),
+         int_width = qnorm(.95) * 2 * model_se) %>%
+  group_by(variable, level, year, prac = !is.na(id.practice)) %>% 
+  summarise(rmse = caret::RMSE(model_satt, SATT), 
+            across(bias:int_width, ~ weighted.mean(., n.patients))) %>% 
+  mutate(variable = ifelse(prac, "Practice", variable),
+         variable = sub("Yearly", "Overall", variable)) %>% 
+  select(-prac)
+```
+
+```{r}
+# And a version not averaged
+curia_eval.datasets <- combined_ests %>% 
+  # Not estimating practice effects for this comparison
+  filter(is.na(id.practice)) %>% 
+  # Align names with scoring data from competition
+  rename(true = SATT, satt = model_satt, se = model_se) %>% 
+  mutate(bias = true - satt,
+         abs_bias = abs(bias),
+         # lower.90 = satt - qnorm(.95) * se,
+         # upper.90 = satt + qnorm(.95) * se,
+         # cover = between(true, lower.90, upper.90),
+         width = qnorm(.95) * 2 * se) %>% 
+  summarise(.by = c(variable, level, year, dataset.num),
+            #rmse = caret::RMSE(satt, true),
+            across(c(true, satt, se, bias:width), ~ weighted.mean(.x, n.patients))) %>% 
+  mutate(lower.90 = satt - qnorm(.95) * se,
+         upper.90 = satt + qnorm(.95) * se,
+         cover = between(true, lower.90, upper.90)) %>% 
+  mutate(id.practice = NA)
+```
+
+Compare to ACIC winners:
+
+```{r, cache=TRUE}
+acic_winners <- readRDS("Data/eval_simple_tosend.RDS")
+```
+```{r}
+evals_compare <- names(acic_winners) %>% 
+  #keep(~ grepl("^t2", .x)) %>% 
+  map(~ acic_winners[[.x]]$eval %>% mutate(method = .x)) %>%
+  list_rbind() %>% 
+  select(-DGP_name) %>% 
+  rbind(curia_eval.datasets %>% mutate(method = 'curia')) %>% 
+  left_join(n.patients.combined, by = c("dataset.num", "variable", "id.practice", "level", "year")) %>% 
+  select(-id.practice)
+evals_compare
+```
+```{r}
+
+```
+
+```{r}
+data.plot <- evals_compare %>% 
+  summarise(.by = c(variable, level, year, method),
+            subgroup_size = mean(n.patients, na.rm = TRUE),
+            rmse = caret::RMSE(satt, true)) %>% 
+  mutate(variable_level = paste0(variable, ifelse(is.na(level), '', paste0('_', level)))) %>% 
+  mutate(method = factor(method, levels = rev(c('curia', setdiff(unique(method), 'curia')))))
+  
+ggplot(data = data.plot, aes(x = subgroup_size, y = rmse)) + 
+         geom_line(aes(group = method, color = method == 'curia')) +
+  scale_color_manual(values = c(`TRUE`='darkblue', `FALSE`='lightgray')) +
+  scale_y_log10()
+```
+```{r}
+evals_compare %>% 
+         summarise(.by = c(variable, level, year, method),
+                   subgroup_size = mean(n.patients),
+                   rmse = caret::RMSE(satt, true), 
+                   across(c(satt, true, bias, abs_bias, lower.90, upper.90, cover, width),
+                          ~ weighted.mean(., n.patients))) %>%
+        write_csv("eval_compare.csv")
+```
+
+```{r}
+data.plot <- evals_compare %>% 
+  summarise(.by = c(variable, level, year, method),
+            subgroup_size = mean(n.patients, na.rm = TRUE),
+            rmse = caret::RMSE(satt, true), 
+            across(c(bias, abs_bias, cover, width), ~weighted.mean(., n.patients))) %>% 
+  filter(is.na(year)) %>% 
+  # Affects draw order for plot
+  mutate(method = factor(method, levels = rev(c('curia', setdiff(unique(method), 'curia')))))
+  
+#method_groups = c('curia', keep(names(acic_winners), ~grepl("^t2", .)))
+
+map(c("rmse", "bias", "abs_bias", "cover", "width"), function(.x) {
+  ggplot(data = data.plot, aes(x = subgroup_size, y = !!sym(.x))) + 
+    geom_line(aes(group = method, color = method == 'curia')) +
+    scale_color_manual(values = c(`TRUE`='darkblue', `FALSE`='lightgray')) +
+    {if(.x %in% c("rmse")) scale_y_log10() else NULL} + 
+    labs(title = .x)
+  ggsave(file = paste0("plot_", .x, "_by_subgroup_size.png"))
+})
+
+```
+

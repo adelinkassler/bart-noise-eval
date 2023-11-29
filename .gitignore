@@ -1,0 +1,20 @@
+# R project files
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# Data file types and locations
+*.rds
+*.csv
+Data/*
+
+# Image file types
+*.png
+
+# Misc special binaries
+.DS_Store
+
+# Obsidian Vault
+BCBS Consulting/*
