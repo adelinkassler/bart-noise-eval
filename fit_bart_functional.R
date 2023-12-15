@@ -1,87 +1,107 @@
-# A script to use on remote nodes to fit BART and DART.
-# Adelin Kassler - Nov 2024
+# Fit bart runs to 10x code
 
-# Notes: the original version of the script was meant to be run on data that had
-# been formatted into wide format, then had noise added. As of 11/29 it was
-# retooled to accept raw data with noise added in ACIC format.
-
-library(tidyverse)
-library(BART)
 library(caret)
+library(glue)
+library(testthat)
+library(BART)
+library(tidyverse)
 
-main <- function(dataset_num, noise_name = NULL) { #<<<<< BEGIN MAIN
-  
-# TODO: if/else to handle base/noise selection from args
-dataset_name <- dataset_num
 
-# Paths to load data in ACIC format (maybe +noise). %s = dataset name, i.e. num
-# (e.g. "0001"), plus possible noise code (e.g. norm100). Paths may be
-# difference for noised data set.
-if (is.null(noise_name)) {
-  path_p <- "Data/track2_20220404/practice/acic_practice_%s.csv"
-  path_py <- "Data/track2_20220404/practice_year/acic_practice_year_%s.csv"
-} else {
-  path_p <- "Data/noise_gen/practice/acic_practice_%s.csv"
-  # path_p <- "Data/curia_data/df_merged_raw_practice_level_10x/merged_dataset_practice_%sb.csv"
-  path_py <- "Data/noise_gen/practice_year/acic_practice_year_%s.csv"
+# Processing curia data ---------------------------------------------------
+
+dedup_cols <- function(x) {
+  dup_cols <- duplicated(t(x))
+  x[!dup_cols]
 }
 
-# Paths to write analysis output to. %s = BART/DART, %s = dataset name
-path_analysis <- "Data/analyzed/estimates_%s_%s.csv"
-path_pdep <- "Save/pdep_draws_%s_%s.rds"
-path_fits <- "Save/fit_%s_%s.rds"
+get_practice_level_vars <- function(x) {
+  expect_in(c('id.practice', 'Z', 'year'), names(x))
+  
+  x %>% 
+    group_by(id.practice) %>% 
+    summarise(
+      n = n(),
+      across(!n, n_distinct)
+    ) %>% 
+    select(-id.practice, -Z) %>% 
+    {as.data.frame(t(rbind(
+      mean = summarise(., across(everything(), mean)) %>% round(1),
+      sd = summarise(., across(everything(), sd)) %>% round(3)
+    )))} %>% 
+    filter(mean == 1, sd == 0) %>% 
+    rownames()
+}
 
-# Load data ---------------------------------------------------------------
+select_practice_level <- function(x) {
+  expect_in(c('id.practice', 'Z'), names(x))
+  practice_level_vars <- get_practice_level_vars(x)
+  select(x, id.practice, Z, all_of(practice_level_vars))
+}
 
-data_py.raw <- read.csv(sprintf(path_py, dataset_name), stringsAsFactors = TRUE)
-data_p.raw <- read.csv(sprintf(path_p, dataset_name), stringsAsFactors = TRUE)
+select_practice_year_level <- function(x) {
+  expect_in(c('id.practice', 'Z'), names(x))
+  practice_level_vars <- get_practice_level_vars(x)
+  select(x, id.practice, Z, !all_of(practice_level_vars))
+}
+
 
 
 # Format data -------------------------------------------------------------
 
-data_py.wide <- data_py.raw %>%
-  pivot_longer(!c(id.practice, year, Z)) %>%
-  group_by(id.practice, name) %>%
-  arrange(id.practice, name, year) %>% 
-  mutate(diff1 = value - lag(value),
-         diff2 = value - lag(lag(value)),
-         diff3 = value - lag(lag(lag(value)))) %>% 
-  ungroup() %>%
-  pivot_wider(id_cols = c(id.practice, Z),
-              names_from = c(name, year),
-              values_from = c(value, diff1, diff2, diff3),
-              names_glue = "{name}{ifelse(.value=='value','','_diff')}.y{year}{ifelse(.value=='value','',paste0('_y',year-parse_number(.value,na='value')))}") %>% 
-  select(!starts_with("post") & 
-           !ends_with(c('0', '-1', '-2')) & 
-           !starts_with(c("Y_diff.y3", "Y_diff.y4"))) %>% 
-  # TODO: outcome variable should be Y_avg.post - Y_avg.pre
-  mutate(Y_avg.post = (Y.y3 * n.patients.y3 + Y.y4 * n.patients.y4) /
-           (n.patients.y3 + n.patients.y4)) %>%
-  select(-Y.y4, -Y.y3)
+strings_to_factors <- function(x) {
+  mutate(x, across(where(is.character), as.factor))
+}
 
-data.main <- inner_join(data_py.wide, data_p.raw, by = "id.practice")
-class(data.main) <- "data.frame"
+format_practice_year_wide <- function(practice_year) {
+  expect_in(c('id.practice', 'Z', 'year', 'Y', 'n.patients'), 
+             names(practice_year))
+  
+  practice_year %>%
+    pivot_longer(!c(id.practice, year, Z)) %>%
+    group_by(id.practice, name) %>%
+    arrange(id.practice, name, year) %>% 
+    mutate(diff1 = value - lag(value),
+           diff2 = value - lag(lag(value)),
+           diff3 = value - lag(lag(lag(value)))) %>% 
+    ungroup() %>%
+    pivot_wider(id_cols = c(id.practice, Z),
+                names_from = c(name, year),
+                values_from = c(value, diff1, diff2, diff3),
+                names_glue = "{name}{ifelse(.value=='value','','_diff')}.y{year}{ifelse(.value=='value','',paste0('_y',year-parse_number(.value,na='value')))}") %>% 
+    select(!starts_with("post") & 
+             !ends_with(c('0', '-1', '-2')) & 
+             !starts_with(c("Y_diff.y3", "Y_diff.y4"))) %>% 
+    # TODO: outcome variable should be Y_avg.post - Y_avg.pre
+    mutate(Y_avg.post = (Y.y3 * n.patients.y3 + Y.y4 * n.patients.y4) /
+             (n.patients.y3 + n.patients.y4)) %>%
+    select(-Y.y4, -Y.y3)
+}
 
-rm(data_py.raw, data_p.raw, data_py.wide)
+add_pscores <- function(practice) {
+  return(practice) # Placeholder
+}
+
+join_practice_level <- function(practice, practice_year) {
+  x <- inner_join(practice, practice_year, by = c('id.practice', 'Z'))
+  class(x) <- 'data.frame'
+  x
+}
+
+get_rhs_names <- function(x) {
+  expect_in(c("Y_avg.post", 'id.practice'), names(x))
+  setdiff(names(x), c("Y_avg.post", 'id.practice'))
+}
+
+as_rhs <- function(x) {
+  if (!(class(x)[1] %in% c('data.frame', 'matrix'))) 
+    class(x) <- 'data.frame'
+  
+  x[get_rhs_names(x)] %>% 
+    strings_to_factors()
+}
 
 
-# Fit BART/DART to data+noise ---------------------------------------------
-
-x_names <- setdiff(names(data.main), c("Y_avg.post", 'id.practice'))
-
-# TODO: we need longer burn-in for bart, and especially dart
-# 100->200 for bart
-# for dart, needs iteration
-# skip, don't take more samples
-bart.fit <- gbart(data.main[x_names], data.main[['Y_avg.post']], sparse = F, nskip = 200)
-dart.fit <- gbart(data.main[x_names], data.main[['Y_avg.post']], sparse = T, nskip = 2000, ndpost = 1000, keepevery = 5)
-
-saveRDS(bart.fit, sprintf(path_fits, 'BART', dataset_name))
-saveRDS(dart.fit, sprintf(path_fits, 'DART', dataset_name))
-
-# return()
-
-# Partial dependence calculations -----------------------------------------
+# Performance evals from BART fits ----------------------------------------
 
 pdep <- function(.model, .data) {
   newdata.z1 <- newdata.z0 <- .data %>% 
@@ -140,7 +160,7 @@ get_all_estimates <- function(pred.diff, .data) {
     ..data.sub <- ..data %>% mutate(.idx = 1:nrow(..data)) %>% filter(id.practice == .x)
     posterior_estimate(pred.diff[, ..data.sub$.idx], ..data.sub) %>% 
       mutate(id.practice = .x)
-    }))
+  }))
   
   satt.levels <- list_rbind(map(1:5, function(.x)
     list_rbind(map(unique(..data[[paste0("X", .x)]]), function(.y) {
@@ -158,33 +178,57 @@ get_all_estimates <- function(pred.diff, .data) {
 }
 
 
-# Run performance functions -----------------------------------------------
+# Main --------------------------------------------------------------------
 
-# Run the performance functions for BART
-pdep_draws.bart <- pdep(bart.fit, data.main)
-bart.ests <- get_all_estimates(pdep_draws.bart, data.main)
-
-# Run the performance functions for DART
-pdep_draws.dart <- pdep(dart.fit, data.main)
-dart.ests <- get_all_estimates(pdep_draws.dart, data.main)
-
-
-# Output posterior draws and estimates ------------------------------------
-
-saveRDS(pdep_draws.bart, sprintf(path_pdep, 'BART', dataset_name))
-saveRDS(pdep_draws.dart, sprintf(path_pdep, 'DART', dataset_name))
-
-write_csv(bart.ests, sprintf(path_analysis, 'BART', dataset_name))
-write_csv(dart.ests, sprintf(path_analysis, 'DART', dataset_name))
+main.curia_merged <- function(data_path) {
+  # merged_data_path <- glue("Data/curia_data/df_merged_raw_practice_level_10x/",
+  #                       "merged_dataset_practice_{dataset_num}b.csv")
+  merged_data <- read_csv(data_path) %>% 
+    dedup_cols() %>% 
+    strings_to_factors() %>% 
+    rename(Y = label, n.patients = n_patients_in_practice)
   
-} #>>>>> END MAIN
-
-
-# Run main function -------------------------------------------------------
-
-dataset_nums <- read_csv("Data/dataset_nums.csv") %>% 
-  pull(dataset_num)
-
-for (num in dataset_nums) {
-  main(num)
+  practice <- select_practice_level(merged_data)
+  practice_year <- select_practice_year_level(merged_data)
+  
+  data <- join_practice_level(
+    practice_year = practice_year %>% format_practice_year_wide(),
+    practice = practice %>% add_pscores()
+  )
+  
+  data.rhs <- as_rhs(data)
+  bart.fit <- gbart(data.rhs, data[['Y_avg.post']], sparse = F, nskip = 200)
+  dart.fit <- gbart(data.rhs, data[['Y_avg.post']], sparse = T, nskip = 2000,
+                    ndpost = 1000, keepevery = 5)
+  
+  pdep_post.bart <- pdep(bart.fit, data)
+  pdep_post.dart <- pdep(dart.fit, data)
+  
+  bart.ests <- get_all_estimates(pdep_post.bart, data)
+  dart.ests <- get_all_estimates(pdep_post.dart, data)
+  
+  dataset_name <- basename(data_path) %>% sub('\\..*$', '', .)
+  
+  saveRDS(bart.fit, glue("Save/fits/fit_{dataset_name}_BART.rds"))
+  saveRDS(dart.fit, glue("Save/fits/fit_{dataset_name}_DART.rds"))
+  saveRDS(pdep_post.bart, glue("Save/pdep_post/pdep_{dataset_name}_BART.rds"))
+  saveRDS(pdep_post.dart, glue("Save/pdep_post/pdep_{dataset_name}_DART.rds"))
+  write_csv(bart.ests, glue("Data/analyzed/{dataset_name}_BART.csv"))
+  write_csv(dart.ests, glue("Data/analyzed/{dataset_name}_DART.csv"))
+  
+  return(NULL)
 }
+
+dur <- c()
+for (path in dir("Data/curia_data/df_merged_raw_practice_level_10x/", 
+                 full.names = TRUE)) {
+  start <- Sys.time()
+  try(main.curia_merged(path))
+  dur <- append(dur, Sys.time() - start)
+}
+# Trimming durations avoids outsized impact of, eg, closing lid of laptop during
+# a long string of runs
+avg_dur <- mean(dur, trim = floor(log10(length(dur))) / length(dur))
+message(glue("Avg duration/run = {format(mean(dur, 0.01))} over {length(dur)} runs"))
+
+
