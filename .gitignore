@@ -4,6 +4,7 @@
 .RData
 .Ruserdata
 *.Rproj
+.RDataTmp
 
 # Data file types and locations
 *.rds

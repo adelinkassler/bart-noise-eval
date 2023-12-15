@@ -1,0 +1,62 @@
+---
+title: "FIT Bart to Curia 10x"
+output: html_notebook
+---
+
+Split the curia datasets into practice and practice-year datasets so we can use the the same way.
+
+```{r}
+library(tidyverse)
+
+knitr::opts_chunk$set(message = FALSE)
+
+merged_dataset_practice_0026b <- read_csv("Data/curia_data/df_merged_raw_practice_level_10x/merged_dataset_practice_0026b.csv")
+curia_merged_raw <- merged_dataset_practice_0026b
+
+```
+
+Are the columns unique? Return an empty logical if true, or a named list of the duplicates (second-occurring only of each pair).
+
+```{r}
+dup_cols <- duplicated(t(curia_merged_raw))
+
+# Print out results
+keep(dup_cols, isTRUE)
+
+# Remove dupes from data
+curia_merged_raw <- curia_merged_raw[!dup_cols]
+```
+
+Which cols vary at the practice level, and which at the practice year level? Use these variable naes to separate into `practice` and `practice_year` datasets
+
+```{r}
+# Get number of unique values per variable w/i practice. Practice level variables will be 1
+practice_level_vars <- curia_merged_raw %>% 
+  group_by(id.practice) %>% 
+  summarise(
+    n = n(),
+    across(!n, n_distinct)
+  ) %>% 
+  select(-id.practice, -Z) %>% 
+  {as.data.frame(t(rbind(
+    mean = summarise(., across(everything(), mean)) %>% round(1),
+    sd = summarise(., across(everything(), sd)) %>% round(3)
+  )))} %>% 
+  filter(mean == 1, sd == 0) %>% 
+  rownames()
+
+# Show results
+practice_level_vars
+
+# Create the two datasets
+curia_practice <- curia_merged_raw %>% 
+  select(id.practice, Z, all_of(practice_level_vars))
+curia_practice_year <- curia_merged_raw %>% 
+  select(!all_of(practice_level_vars))
+```
+# Functionalize
+
+```{r}
+
+```
+

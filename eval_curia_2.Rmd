@@ -3,74 +3,75 @@ title: "R Notebook"
 output: html_notebook
 ---
 
-Notebook to compare contractor results to true values.
+# Setup/metadata
 
----
-
-# Setup
-
-Load in our ground truths and a sample data set from Curia.
-
-## Ground Truth from ACIC
-
-```{r message=FALSE}
+```{r}
 library(tidyverse)
 
+knitr::opts_chunk$set(message = FALSE)
+
+```
+
+Which datasets are we looking at? I.e., which datasets did Curia provide us with?
+
+```{r message=FALSE}
+dataset_nums <- read_csv("Data/curia_data/dataset_nums.csv") %>% 
+  pull(dataset_num)
+```
+
+Ground truth datasets
+
+```{r}
 estimand_truths <- read_csv("Data/ACIC_estimand_truths.csv")
 
 ```
 
-## Curia estimates
+DGP descriptions. Output of chunk shows unique combinations in current set of dataset nums.
 
-```{r, eval=FALSE, cache=TRUE, message=FALSE}
-# Load in curia estimates from separate tables. Expensive.
-curia_estimates <- dir("Data/curia") %>%
-  map(~ read_csv(file.path("Data", "curia", .))) %>%
-  grep("acic_[a-z]+_([0-9]{4})\\.csv", ., value=T) %>% 
-  list_rbind() %>%
-  mutate(dataset.num = sprintf("%04d", dataset.num))
-write_csv(curia_estimates, "Data/all_curia_estimates.csv")
+```{r}
+dgp_levels <- estimand_truths %>% 
+  select(dataset.num:`Idiosyncrasy of Impacts`) %>% 
+  distinct()
 
-```
-
-```{r, message=FALSE}
-# Read in consolidated estimates cached from previous chunk
-curia_estimates <- read_csv("Data/formatted/all_curia_estimates.csv")
+dgp_levels %>% 
+  filter(dataset.num %in% dataset_nums) %>% 
+  distinct(pick(-dataset.num))
 
 ```
 
-## ACIC practice data
 
-```{r, message=FALSE, cache=TRUE, eval=FALSE}
+
+## Practice/Practice-Year Information
+
+```{r, eval=FALSE}
 # Read in the competition data to get practice-year-level data for weighted means
 n.patients.all <- dir("Data/track2_20220404/practice_year/", full.names = TRUE) %>% 
   map(~ read_csv(.x) %>% 
         select(id.practice, n.patients, year) %>% 
         mutate(dataset.num = str_match(basename(.x), '[0-9]+')[1,1])) %>% 
   list_rbind()
-```
 
-```{r, message=FALSE, cache=TRUE, eval=FALSE}
 # Read in the competition data to get practice-level data for weighted means
 practice_level <- dir("Data/track2_20220404/practice/", full.names = TRUE) %>% 
   map(~ read_csv(.x) %>% 
         mutate(dataset.num = str_match(basename(.x), '[0-9]+')[1,1])) %>% 
   list_rbind()
-```
 
-```{r, cache=TRUE, eval=FALSE}
 write_csv(practice_level, "Data/formatted/practice_true.csv")
 write_csv(n.patients.all, "Data/formatted/n_patients_all.csv")
+
 ```
 
-```{r eval=TRUE, message=FALSE}
+```{r}
+# Load results of previous chunk
 practice_level <- read_csv("Data/formatted/practice_true.csv")
 n.patients.all <- read_csv("Data/formatted/n_patients_all.csv")
+
 ```
 
 Subset number of patients to get weights
 
-```{r, message=FALSE}
+```{r}
 # aggregate and summarize by all the variables
 n.patients.overall <- n.patients.all %>% 
   group_by(dataset.num) %>% 
@@ -105,19 +106,50 @@ n.patients.combined <- bind_rows(n.patients.overall, n.patients.by_practice,
                                  n.patients.by_X, n.patients.by_year)
 ```
 
-Get the datasets we're using to compare to curia (we'll use this later)
 
-```{r message=FALSE}
-dataset_nums <- read_csv("Data/curia_data/dataset_nums.csv") %>% 
-  pull(dataset_num)
+# Performance estimates
+
+## ACIC winners
+
+```{r, cache=TRUE}
+acic_winners.raw <- readRDS("Data/eval_simple_tosend.RDS")
 ```
 
-## Merge
+```{r}
+acic_winners.df <- names(acic_winners) %>% 
+  #keep(~ grepl("^t2", .x)) %>% 
+  map(~ acic_winners[[.x]]$eval %>% mutate(method = .x)) %>%
+  list_rbind()
 
-Now merge the ground truths, the curia data, and the practice data
+```
+
+
+## Curia
+
+```{r, eval=FALSE}
+# Load in curia estimates from separate tables.
+# ⚠️ Slow
+curia_estimates <- dir("Data/curia") %>%
+  map(~ read_csv(file.path("Data", "curia", .))) %>%
+  grep("acic_[a-z]+_([0-9]{4})\\.csv", ., value=T) %>% 
+  list_rbind() %>%
+  mutate(dataset.num = sprintf("%04d", dataset.num))
+
+# Write for quick loading
+write_csv(curia_estimates, "Data/all_curia_estimates.csv")
+
+```
 
 ```{r}
-# Join the two data sets
+# Load results of previous chunk
+curia_estimates <- read_csv("Data/formatted/all_curia_estimates.csv")
+
+```
+
+### Performance metrics
+
+```{r}
+# Join on the ground truths
 combined_ests <- curia_estimates %>% 
   left_join(estimand_truths, 
             by = c("dataset.num", "variable", "level", "year", "id.practice"),
@@ -127,28 +159,6 @@ combined_ests <- curia_estimates %>%
   left_join(n.patients.combined, by = c("dataset.num", "variable", "level", "year", "id.practice")) %>% 
   filter(dataset.num %in% dataset_nums)
 
-```
-
-
-# Performance
-
-```{r, eval=FALSE}
-# Check performance averaged across datasets
-curia_eval.collapsed <- combined_ests %>% 
-  mutate(bias = SATT - model_satt,
-         abs_bias = abs(bias),
-         coverage = abs_bias / model_se < qnorm(.95),
-         int_width = qnorm(.95) * 2 * model_se) %>%
-  group_by(variable, level, year, prac = !is.na(id.practice)) %>% 
-  summarise(rmse = caret::RMSE(model_satt, SATT), 
-            across(bias:int_width, ~ weighted.mean(., n.patients))) %>% 
-  mutate(variable = ifelse(prac, "Practice", variable),
-         variable = sub("Yearly", "Overall", variable)) %>% 
-  select(-prac)
-```
-
-```{r}
-# And a version not averaged
 curia_eval.datasets <- combined_ests %>% 
   # Not estimating practice effects for this comparison
   filter(is.na(id.practice)) %>% 
@@ -166,28 +176,12 @@ curia_eval.datasets <- combined_ests %>%
   mutate(lower.90 = satt - qnorm(.95) * se,
          upper.90 = satt + qnorm(.95) * se,
          cover = between(true, lower.90, upper.90)) %>% 
-  mutate(id.practice = NA)
+  mutate(id.practice = NA,
+         method = "curia")
 ```
 
-TODO: What is the difference between those two objects? Why did I choose one over the other?
 
-## Add ACIC winners
-
-```{r, cache=TRUE}
-acic_winners <- readRDS("Data/eval_simple_tosend.RDS")
-```
-
-```{r}
-
-acic_winners_df <- names(acic_winners) %>% 
-  #keep(~ grepl("^t2", .x)) %>% 
-  map(~ acic_winners[[.x]]$eval %>% mutate(method = .x)) %>%
-  list_rbind()
-
-
-```
-
-## Add BART results
+## Bart
 
 ```{r}
 bart_satt_ests <- readRDS("Save/bart_satt_ests_600_1x.rds")
@@ -196,73 +190,100 @@ bart_satt_ests <- readRDS("Save/bart_satt_ests_600_1x.rds")
 
 ```{r}
 bart_perf <- bart_satt_ests %>% 
+  # Merge on the truth
   left_join(estimand_truths %>% 
               filter(is.na(year)), 
             by = c("dataset.num", "variable", "level", "id.practice"),
             suffix = c(".bart", "")) %>% 
   select(!ends_with(".bart")) %>% 
-  # Replace inner_join with left_join when running full scale on all dataset.num
-  # left_join(n.patients.combined, by = c("dataset.num", "variable", "level", "year", "id.practice")) %>% 
-  filter(dataset.num %in% dataset_nums) %>% 
   rename(lower.90 = q05, upper.90 = q95, satt = est_satt, true = SATT) %>% 
-  mutate()
-```
-
-
-```{r}
-curia_eval.datasets <- combined_ests %>% 
-  # Not estimating practice effects for this comparison
-  filter(is.na(id.practice)) %>% 
-  # Align names with scoring data from competition
-  rename(true = SATT, satt = model_satt, se = model_se) %>% 
+  left_join(n.patients.combined, by = c("dataset.num", "variable", "level", "year", "id.practice")) %>% 
+  filter(dataset.num %in% dataset_nums) %>% 
   mutate(bias = true - satt,
          abs_bias = abs(bias),
-         # lower.90 = satt - qnorm(.95) * se,
-         # upper.90 = satt + qnorm(.95) * se,
+         # TODO: vvv why comment this line out? vvv
          # cover = between(true, lower.90, upper.90),
-         width = qnorm(.95) * 2 * se) %>% 
-  summarise(.by = c(variable, level, year, dataset.num),
-            #rmse = caret::RMSE(satt, true),
-            across(c(true, satt, se, bias:width), ~ weighted.mean(.x, n.patients))) %>% 
-  mutate(lower.90 = satt - qnorm(.95) * se,
-         upper.90 = satt + qnorm(.95) * se,
-         cover = between(true, lower.90, upper.90)) %>% 
-  mutate(id.practice = NA)
+         width = upper.90 - lower.90) %>% 
+  summarise(.by = c(variable, level, year, dataset.num, method),
+            # TODO: vvv why comment this line out? vvv
+            # rmse = caret::RMSE(satt, true),
+            across(c(true, satt, bias:width, lower.90, upper.90), 
+                   ~ weighted.mean(.x, n.patients))) %>% 
+  # TODO: vvv Why calc this after summarize, instead of before? vvv
+  mutate(cover = between(true, lower.90, upper.90)) %>% 
+  mutate(id.practice = NA, se = NA)
+
+  
 ```
 
 
-## Create master evals compare dataset
+# Merge the performance data
 
 ```{r}
 # One large dataset for comparing all evals
 evals_compare <- acic_winners_df %>% 
   select(-DGP_name) %>% 
-  rbind(curia_eval.datasets %>% mutate(method = 'curia')) %>% 
+  rbind(curia_eval.datasets) %>% 
+  rbind(bart_perf) %>% 
   left_join(n.patients.combined, by = c("dataset.num", "variable", "id.practice", "level", "year")) %>% 
   select(-id.practice) %>% 
-  filter(dataset.num %in% dataset_nums)
+  filter(dataset.num %in% dataset_nums) %>% 
+  # Merge back on DGP info
+  left_join(dataset_dgp, by = 'dataset.num')
 
 evals_compare
 
 ```
 
 
-# Analysis/Plots
+# Analysis and plots
 
 ```{r}
 data.plot <- evals_compare %>% 
-  summarise(.by = c(variable, level, year, method),
-            subgroup_size = mean(n.patients, na.rm = TRUE),
-            rmse = caret::RMSE(satt, true)) %>% 
-  mutate(variable_level = paste0(variable, ifelse(is.na(level), '', paste0('_', level)))) %>% 
-  mutate(method = factor(method, levels = rev(c('curia', setdiff(unique(method), 'curia')))))
-  
+  # Summarize across datasets
+  summarise(
+    .by = c(variable, level, year, method, `Confounding Strength`),
+    subgroup_size = mean(n.patients, na.rm = TRUE),
+    rmse = caret::RMSE(satt, true),
+    across(c(bias, abs_bias, cover, width), ~weighted.mean(., n.patients))
+  ) %>% 
+  filter(is.na(year)) %>% 
+  # Remove unfinished ACIC submissions
+  filter(!(method %in% c('t1_rBARTimpT', 'ofpsbart', 't1_H-TMLE'))) %>%
+  # Create sensible variables for visualization
+  mutate(
+    # So we can treat all subgroups with the same variable
+    variable_level = paste0(variable, 
+                            ifelse(is.na(level), '', paste0('_', level)),
+                            ifelse(is.na(year), '', paste0('_y', year))),
+    # Ensures methods of interest are at the top of the draw order
+    method = factor(method, levels = rev(c('curia', 'BART', 'DART', 
+                                           setdiff(unique(method), 
+                                                   c('curia', 'BART', 'DART'))))),
+    # Sensible method labelling
+    method_label = case_match(method, 
+                              'curia' ~ 'curia', 
+                              'BART' ~ 'BART',
+                              'DART' ~ 'DART',
+                              .default = 'other')
+  )
+
+data.plot
+
+method_colors <- c(Curia = "#F8766D", Oracle = "#00BFC4", Other = "darkgrey", 
+                   BART = '#4356FF', DART = '#AB54F9')
+
+```
+
+```{r}
 ggplot(data = data.plot, aes(x = subgroup_size, y = rmse)) + 
-         geom_line(aes(group = method, color = method == 'curia')) +
-  scale_color_manual(values = c(`TRUE`='darkblue', `FALSE`='lightgray')) +
+         geom_line(aes(group = method, color = method_label)) +
+  scale_color_manual(values = c(curia = 'darkblue', BART = 'darkred', DART = 'cyan', other = 'lightgray')) +
+  facet_wrap(~ `Confounding Strength`) +
   scale_y_log10()
 ```
-```{r}
+
+```{r, eval=FALSE}
 evals_compare %>% 
          summarise(.by = c(variable, level, year, method),
                    subgroup_size = mean(n.patients),
@@ -273,22 +294,13 @@ evals_compare %>%
 ```
 
 ```{r}
-data.plot <- evals_compare %>% 
-  summarise(.by = c(variable, level, year, method),
-            subgroup_size = mean(n.patients, na.rm = TRUE),
-            rmse = caret::RMSE(satt, true), 
-            across(c(bias, abs_bias, cover, width), ~weighted.mean(., n.patients))) %>% 
-  filter(is.na(year)) %>% 
-  filter(!(method %in% c('t1_rBARTimpT', 'ofpsbart', 't1_H-TMLE'))) %>%
-  # Affects draw order for plot
-  mutate(method = factor(method, levels = rev(c('curia', setdiff(unique(method), 'curia')))))
-  
 #method_groups = c('curia', keep(names(acic_winners), ~grepl("^t2", .)))
 
 map(c("rmse", "bias", "abs_bias", "cover", "width"), function(.x) {
   ggplot(data = data.plot, aes(x = subgroup_size, y = !!sym(.x))) + 
-    geom_line(aes(group = method, color = method == 'curia')) +
-    scale_color_manual(values = c(`TRUE`='darkblue', `FALSE`='lightgray')) +
+    geom_line(aes(group = method, color = method_label)) +
+    scale_color_manual(values = c(curia = 'darkblue', BART = 'darkred', DART = 'cyan', other = 'lightgray')) +
+    facet_wrap(~ `Confounding Strength`) +
     {if(.x %in% c("rmse")) scale_y_log10() else NULL} + 
     labs(title = .x)
   ggsave(file = paste0("Plots/plot_", .x, "_by_subgroup_size.png"))
@@ -317,13 +329,24 @@ oracle_row <- data.frame(
   bias = 0,
   abs_bias = 0
 )
-perf <- bind_rows(perf, oracle_row)
+perf <- bind_rows(perf, oracle_row) %>% 
+  mutate(Method = case_match(
+    method,
+    'curia' ~ 'Curia',
+    'Oracle' ~ 'Oracle',
+    'BART' ~ 'BART',
+    'DART' ~ 'DART',
+    .default = "Other"
+  ))
 
-perf <- perf %>%
-  mutate(Method = ifelse(method == 'curia', 'Curia', 
-                         ifelse(method == 'Oracle', 'Oracle', 'Other')))
+# perf <- perf %>%
+#   mutate(Method = ifelse(method == 'curia', 'Curia', 
+#                          ifelse(method == 'Oracle', 'Oracle', 'Other')))
 
-method_colors <- c(Curia = "#F8766D", Oracle = "#00BFC4", Other = "darkgrey")
+# method_colors <- c(Curia = "#F8766D", Oracle = "#00BFC4", Other = "darkgrey")
+method_colors <- c(Curia = "#F8766D", Oracle = "#00BFC4", Other = "darkgrey", 
+                   BART = '#4356FF', DART = '#AB54F9')
+
 
 #meta <- readRDS('real_submissions.RDS')
 
@@ -340,6 +363,7 @@ perf %>%
   geom_point() + 
   xlab('RMSE, overall SATT') +
   ylab('Coverage of overall SATT 90% interval') +
+  facet_wrap(~ `Confounding Strength`) +
   scale_color_manual(values=method_colors)
 ggsave(file.path('Plots', 'rmse_cover.png'), height=3.5, width=4.5)
 
@@ -349,8 +373,10 @@ perf %>%
   geom_point() + 
   xlab('Width of overall SATT 90% interval') +
   ylab('Coverage of overall SATT 90% interval') +
+  facet_wrap(~ `Confounding Strength`) +
   scale_color_manual(values=method_colors)
 ggsave(file.path("Plots", 'width_cover.png'), height=3.5, width=4.5)
 
 ```
+
 

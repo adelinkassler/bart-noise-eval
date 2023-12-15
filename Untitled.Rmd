@@ -1,0 +1,30 @@
+---
+title: BART analysis postprocessing
+output: html_notebook
+---
+
+Load in all the BART 600 output sets
+
+```{r, message=FALSE}
+library(tidyverse)
+
+analyzed.all <- dir("Data/analyzed/bart_dart_base/", full.names = TRUE) %>% 
+  map(~ read_csv(.x) %>% 
+        mutate(file = .x)) %>% 
+  list_rbind()
+```
+
+Extract relevant info, format data frame
+
+```{r}
+outfile <- analyzed.all %>%
+  separate_wider_position(file, c(40, method=4, 1, dataset.num=4, 4))
+```
+
+Write results
+
+```{r}
+write_csv(outfile, "Data/analyzed/satt_ests_base.csv")
+saveRDS(outfile, "Save/bart_satt_ests_base_1x.rds")
+```
+

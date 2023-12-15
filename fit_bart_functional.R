@@ -5,21 +5,12 @@
 # been formatted into wide format, then had noise added. As of 11/29 it was
 # retooled to accept raw data with noise added in ACIC format.
 
-
-# Setup -------------------------------------------------------------------
-
 library(tidyverse)
 library(BART)
 library(caret)
 
-if (interactive()) {
-  dataset_num <- '0001'
-  noise_name <- NULL
-} else {
-  dataset_num <- commandArgs(TRUE)[1]
-  noise_name <- commandArgs(TRUE)[2] %>% {if (is.na(.)) NULL else .}
-}
-
+main <- function(dataset_num, noise_name = NULL) { #<<<<< BEGIN MAIN
+  
 # TODO: if/else to handle base/noise selection from args
 dataset_name <- dataset_num
 
@@ -31,13 +22,14 @@ if (is.null(noise_name)) {
   path_py <- "Data/track2_20220404/practice_year/acic_practice_year_%s.csv"
 } else {
   path_p <- "Data/noise_gen/practice/acic_practice_%s.csv"
+  # path_p <- "Data/curia_data/df_merged_raw_practice_level_10x/merged_dataset_practice_%sb.csv"
   path_py <- "Data/noise_gen/practice_year/acic_practice_year_%s.csv"
 }
 
 # Paths to write analysis output to. %s = BART/DART, %s = dataset name
 path_analysis <- "Data/analyzed/estimates_%s_%s.csv"
-path_pdep <- "Data/analyzed/pdep_draws_%s_%s.csv"
-
+path_pdep <- "Save/pdep_draws_%s_%s.rds"
+path_fits <- "Save/fit_%s_%s.rds"
 
 # Load data ---------------------------------------------------------------
 
@@ -84,6 +76,10 @@ x_names <- setdiff(names(data.main), c("Y_avg.post", 'id.practice'))
 bart.fit <- gbart(data.main[x_names], data.main[['Y_avg.post']], sparse = F, nskip = 200)
 dart.fit <- gbart(data.main[x_names], data.main[['Y_avg.post']], sparse = T, nskip = 2000, ndpost = 1000, keepevery = 5)
 
+saveRDS(bart.fit, sprintf(path_fits, 'BART', dataset_name))
+saveRDS(dart.fit, sprintf(path_fits, 'DART', dataset_name))
+
+# return()
 
 # Partial dependence calculations -----------------------------------------
 
@@ -144,7 +140,7 @@ get_all_estimates <- function(pred.diff, .data) {
     ..data.sub <- ..data %>% mutate(.idx = 1:nrow(..data)) %>% filter(id.practice == .x)
     posterior_estimate(pred.diff[, ..data.sub$.idx], ..data.sub) %>% 
       mutate(id.practice = .x)
-  }))
+    }))
   
   satt.levels <- list_rbind(map(1:5, function(.x)
     list_rbind(map(unique(..data[[paste0("X", .x)]]), function(.y) {
@@ -175,10 +171,20 @@ dart.ests <- get_all_estimates(pdep_draws.dart, data.main)
 
 # Output posterior draws and estimates ------------------------------------
 
-write_csv(pdep_draws.bart, sprintf(path_pdep, 'BART', dataset_name))
-write_csv(pdep_draws.dart, sprintf(path_pdep, 'DART', dataset_name))
+saveRDS(pdep_draws.bart, sprintf(path_pdep, 'BART', dataset_name))
+saveRDS(pdep_draws.dart, sprintf(path_pdep, 'DART', dataset_name))
 
 write_csv(bart.ests, sprintf(path_analysis, 'BART', dataset_name))
 write_csv(dart.ests, sprintf(path_analysis, 'DART', dataset_name))
+  
+} #>>>>> END MAIN
 
-# Performance evals in another script/notebook, combined with curia evals &c.
+
+# Run main function -------------------------------------------------------
+
+dataset_nums <- read_csv("Data/dataset_nums.csv") %>% 
+  pull(dataset_num)
+
+for (num in dataset_nums) {
+  main(num)
+}
