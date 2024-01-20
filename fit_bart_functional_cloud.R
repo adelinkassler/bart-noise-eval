@@ -11,7 +11,12 @@ library(caret)
 library(glue)
 library(testthat)
 library(BART)
-library(tidyverse)
+# library(tidyverse)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(readr)
+library(tibble)
 
 
 # Global parameters -------------------------------------------------------
@@ -28,6 +33,14 @@ params <- list(
     keepevery = 5
   )
 )
+
+if (!interactive()) {
+  idx_skip <- as.numeric(commandArgs(TRUE)[1])
+  idx_offset <- as.numeric(commandArgs(TRUE)[2])
+} else {
+  idx_skip <- 1
+  idx_offset <- 1
+}
 
 
 # Processing curia data ---------------------------------------------------
@@ -75,10 +88,11 @@ strings_to_factors <- function(x) {
   mutate(x, across(where(is.character), as.factor))
 }
 
-get_sd_y_practice <- function(x, patient_path) {
-  patient.df <- read_csv(patient_path)
+add_sd_y_practice <- function(x, patient_path=NULL) {
+  #patient.df <- read_csv(patient_path)
+  patient.df <- readRDS("sdY.rds")
   
-  #TODO: download track 1 data to get patient information
+  left_join(x, patient.df)
 }
 
 format_practice_year_wide <- function(practice_year) {
@@ -242,7 +256,7 @@ main.curia_merged <- function(data_path) {
   
   data <- join_practice_level(
     practice_year = practice_year %>% format_practice_year_wide(),
-    practice = practice %>% add_pscores()
+    practice = practice %>% add_pscores() %>% add_sd_y_practice()
   )
   
   # TODO: we need longer burn-in for bart, and especially dart
@@ -263,20 +277,24 @@ main.curia_merged <- function(data_path) {
   
   dataset_name <- basename(data_path) %>% sub('\\..*$', '', .)
   
-  saveRDS(bart.fit, glue("Save/fits/fit_{dataset_name}_BART.rds"))
-  saveRDS(dart.fit, glue("Save/fits/fit_{dataset_name}_DART.rds"))
-  saveRDS(pdep_post.bart, glue("Save/pdep_post/pdep_{dataset_name}_BART.rds"))
-  saveRDS(pdep_post.dart, glue("Save/pdep_post/pdep_{dataset_name}_DART.rds"))
-  write_csv(bart.ests, glue("Data/analyzed/{dataset_name}_BART.csv"))
-  write_csv(dart.ests, glue("Data/analyzed/{dataset_name}_DART.csv"))
+  saveRDS(bart.fit, glue("fits/fit_{dataset_name}_BART.rds"))
+  saveRDS(dart.fit, glue("fits/fit_{dataset_name}_DART.rds"))
+  saveRDS(pdep_post.bart, glue("pdep_post/pdep_{dataset_name}_BART.rds"))
+  saveRDS(pdep_post.dart, glue("pdep_post/pdep_{dataset_name}_DART.rds"))
+  write_csv(bart.ests, glue("analyzed/{dataset_name}_BART.csv"))
+  write_csv(dart.ests, glue("analyzed/{dataset_name}_DART.csv"))
   
   return(NULL)
 }
 
 dur <- c()
 cap <- list()
-for (path in dir("Data/curia_data/df_merged_raw_practice_level_10x/", 
-                 full.names = TRUE)[1]) {
+idx_select <- seq(from = idx_offset, 
+                  to = length(dir("df_merged_raw_practice_level/")),
+                  by = idx_skip)
+message(glue("Beginning {length(idx_select)} iterations:"))
+for (path in dir("df_merged_raw_practice_level/", 
+                 full.names = TRUE)[idx_select]) {
   message(glue("(Run #{length(dur)+1}) Working on {path}..."))
   start <- Sys.time()
   try(cap <- append(cap, list(quietly(main.curia_merged)(path))))

@@ -1,0 +1,13 @@
+#Template to download data from gdrive
+#wget --load-cookies /tmp/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies /tmp/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=FILEID' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=FILEID" -O FILENAME && rm -rf /tmp/cookies.txt
+
+# Get curia data from gdrive
+wget --load-cookies /tmp/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies /tmp/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1_2B89zCnzX93o-ufdWCt6Yqgfkz7Hmbh' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1_2B89zCnzX93o-ufdWCt6Yqgfkz7Hmbh" -O 2023_12_10_df_merged_raw_practice_level_10x.zip && rm -rf /tmp/cookies.txt
+
+unzip 2023_12_10_df_merged_raw_practice_level_10x.zip
+
+# Get t1 data
+for i in {a,b,c}; do wget https://acic2022.mathematica.org/data/track1${i}_20220404.zip; done
+
+# Send data to bucket?
+aws s3 cp df_merged_raw_practice_level s3://curia-pmi-poc-s3-bucket/~/ --recursive

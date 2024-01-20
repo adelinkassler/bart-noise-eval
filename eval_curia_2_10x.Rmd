@@ -43,6 +43,14 @@ dgp_levels %>%
 
 ## Practice/Practice-Year Information
 
+We'll want to use weighted means by number of patients in order to get a lot of subgroup estimates later down the road. 
+
+First I load in practice year level data from the ACIC competition, select just the year and the number of patients in each practice, and create a date set number column by Rex parsing the file names. Then I bind them all together into a single large data set that has the number of patients per practice per year for all ACIC data sets.
+
+Next I map overall ACIC practice level data sets, load in the data set for each, and similarly parse the file name into a data set number. This gives me a single data frame containing the practice level characteristics of each practice, which will be needed to join on data set later for analysis.
+
+Lastly, because this is an expensive operation, I save out both data sets so that they can be loaded directly later on. Unless this chunk is modified, it will be skipped for evaluation and the next chunk which loads the data sets, will be run.
+
 ```{r, eval=FALSE}
 # Read in the competition data to get practice-year-level data for weighted means
 n.patients.all <- dir("Data/track2_20220404/practice_year/", full.names = TRUE) %>% 
@@ -62,14 +70,18 @@ write_csv(n.patients.all, "Data/formatted/n_patients_all.csv")
 
 ```
 
-```{r}
+Read in the cached results of the previous chunk.
+
+```{r, message=FALSE}
 # Load results of previous chunk
 practice_level <- read_csv("Data/formatted/practice_true.csv")
 n.patients.all <- read_csv("Data/formatted/n_patients_all.csv")
 
 ```
 
-Subset number of patients to get weights
+The subgroups we are interested in are those formed by the different levels of the categorical X variables at the practice level, as well as by practice, by year, and overall. Because these are overlapping subgroups, we are going to be stacking them with `rbind` later down the road. This chunk prepares us for this by similarly stacking number of patients so that we can join them on an analysis status with the appropriate subgroups. 
+
+The output of this chunk shows in a bridged version of the resulting data frame.
 
 ```{r}
 # aggregate and summarize by all the variables
@@ -104,50 +116,83 @@ n.patients.by_X <- map(1:5, function(i) {
 # Create one dataframe to merge
 n.patients.combined <- bind_rows(n.patients.overall, n.patients.by_practice, 
                                  n.patients.by_X, n.patients.by_year)
+
+# Output of this chunk shows an abridged version of what n.patients.combined looks like
+n.patients.combined %>% 
+  filter(dataset.num == '0001', 
+         id.practice %in% c(NA, 1, 2, 3), 
+         variable %in% c('X1', 'X2', NA, 'Overall'))
 ```
 
 
 # Performance estimates
 
+This section covers loading the competition results, formatting them, and computing performance estimates from them. We get performance estimates from three main sources:
+
+- The ACIC 2024 competition results
+- The estimates given to us by Curia
+- BART/DART estimates (calculated in 'run_all_loops.R')
+
 ## ACIC winners
+
+The ACIC contest results are provided in the form of a serialized R binary object. I create an object `acic_winners.df` which places the results of all the methods into a single dataframe.
 
 ```{r, cache=TRUE}
 # acic_winners.raw <- readRDS("Data/eval_simple_tosend.RDS")
 acic_winners <- readRDS("Data/eval_simple_tosend.RDS")
-```
 
-```{r}
 acic_winners.df <- names(acic_winners) %>% 
   #keep(~ grepl("^t2", .x)) %>% 
   map(~ acic_winners[[.x]]$eval %>% mutate(method = .x)) %>%
-  list_rbind()
+  list_rbind() %>% 
+  select(-DGP_name) %>% 
+  mutate(noise = FALSE,
+         outcome= 'ywavg')
 
 ```
 
 
 ## Curia
 
-```{r, eval=FALSE}
+Curia estimates are loaded first from the baseline data sets and then from the 10 X noise generated sets. Some amount of filtering is necessary to ensure we're only loading the files we want. Since this is a slow process, I'm also saving out the resulting data set for quick loading in the next chunk.
+
+```{r, eval=FALSE, message=FALSE}
 # Load in curia estimates from separate tables.
 # ⚠️ Slow
-curia_estimates <- dir("Data/curia") %>%
-  map(~ read_csv(file.path("Data", "curia", .))) %>%
-  grep("acic_[a-z]+_([0-9]{4})\\.csv", ., value=T) %>% 
+curia_estimates <- dir("Data/curia_results/1x/", full.names = TRUE) %>%
+  # grep("acic_[a-z]+_([0-9]{4})\\.csv", ., value=T) %>%
+  map(~ read_csv(.x)) %>%
   list_rbind() %>%
-  mutate(dataset.num = sprintf("%04d", dataset.num))
+  mutate(dataset.num = sprintf("%04d", dataset.num)) %>% 
+  mutate(noise = FALSE)
+
+curia_estimates_10x <- dir("Data/curia_results/satt_results_10x/", full.names = TRUE) %>%
+  grep("acic_[a-z]+_([0-9]{4}b)\\.csv", ., value=T) %>% 
+  map(~ read_csv(.x)) %>%
+  list_rbind() %>% 
+  mutate(dataset.num = sprintf("%04d", dataset.num)) %>% 
+  mutate(noise = TRUE, outcome = 'ywavg')
+
+curia_estimates <- bind_rows(curia_estimates, curia_estimates_10x)
+
 
 # Write for quick loading
-write_csv(curia_estimates, "Data/all_curia_estimates.csv")
+write_csv(curia_estimates, "Data/formatted/all_curia_estimates_10x.csv")
 
 ```
 
-```{r}
+```{r, message=FALSE}
 # Load results of previous chunk
-curia_estimates <- read_csv("Data/formatted/all_curia_estimates.csv")
+curia_estimates <- read_csv("Data/formatted/all_curia_estimates_10x.csv")
+   
 
 ```
 
 ### Performance metrics
+
+Here, I'm generating some necessary precursors for performance analysis. First, the Curia estimates are joined with the ground truths from the ACC competition and the number of patients which will be used for weighted averages. In this step, I also subset down to just the data sets we will use for the comparison between curia and Bart (600 baseline, 200 10x noise).
+
+After this, I calculate the bias, absolute bias, confidence interval width, interval boundaries, and interval coverage for each data point, and then summarizing within the relevant subgroups - variable and level, year, data set number, and baseline versus 10X noise - using number of patience as a wait for a weighted average.
 
 ```{r}
 # Join on the ground truths
@@ -171,23 +216,25 @@ curia_eval.datasets <- combined_ests %>%
          # upper.90 = satt + qnorm(.95) * se,
          # cover = between(true, lower.90, upper.90),
          width = qnorm(.95) * 2 * se) %>% 
-  summarise(.by = c(variable, level, year, dataset.num),
-            #rmse = caret::RMSE(satt, true),
-            across(c(true, satt, se, bias:width), ~ weighted.mean(.x, n.patients))) %>% 
   mutate(lower.90 = satt - qnorm(.95) * se,
          upper.90 = satt + qnorm(.95) * se,
          cover = between(true, lower.90, upper.90)) %>% 
+  summarise(.by = c(variable, level, year, dataset.num, noise),
+            # rmse = caret::RMSE(satt, true),
+            across(c(true, satt, se, bias, abs_bias, width, lower.90, upper.90, cover), ~ weighted.mean(.x, n.patients))) %>% 
   mutate(id.practice = NA,
+         outcome = 'ywavg',
          method = "curia")
 ```
 
 
 ## Bart
 
-```{r, message=FALSE}
-bart_satt_ests.l <- dir("Data/analyzed", full.names = TRUE) %>%
+```{r, message=FALSE, eval=FALSE}
+bart_satt_ests.l <- dir("Data/analyzed/run_all_loops/", full.names = TRUE) %>%
   keep(~ !file.info(.x)$isdir) %>% 
   keep(~ file.info(.x)$size > 10) %>% 
+  grep('[0-9]{4}b?(_ydiff_w)?_ps', ., value = TRUE) %>% 
   map(function(x) {
     df <- read_csv(x)
     # tryCatch(read_csv(x), error = function(e) esc <<- TRUE)
@@ -201,13 +248,21 @@ bart_satt_ests <- bart_satt_ests.l %>%
   #mutate(dataset.num = sprintf("%.04s", dataset.num))
 
 saveRDS(bart_satt_ests, "Save/bart_satt_ests_600_1x_extended.rds")
+#rm(bart_satt_ests.l)
 ```
 
-```{r}
+```{r, message=FALSE}
 # bart_satt_ests <- readRDS("Save/bart_satt_ests_600_1x.rds")
-bart_satt_ests <- readRDS("Save/bart_satt_ests_600_1x_extended.rds") %>% 
+bart_satt_ests <- readRDS("Save/bart_satt_ests_600_1x_extended.rds") #%>% 
+  #filter(grepl('^b_ps', method))
+bart_satt_ests <- bart_satt_ests %>% 
+  mutate(noise = grepl('^b', method),
+         outcome = ifelse(grepl('^ydiff', method), 'ydiff', 'ywavg'),
+         method = sub('^b?(_ydiff)?(_w)?_', '', method)) %>% 
+  filter(grepl('ps', method)) %>% 
+  #bind_rows(., read_csv("Data/analyzed/satt_ests_base.csv")) %>% 
+  mutate(noise = replace_na(noise, FALSE))
   
-
 ```
 
 ```{r}
@@ -226,7 +281,7 @@ bart_perf <- bart_satt_ests %>%
          # TODO: vvv why comment this line out? vvv
          # cover = between(true, lower.90, upper.90),
          width = upper.90 - lower.90) %>% 
-  summarise(.by = c(variable, level, year, dataset.num, method),
+  summarise(.by = c(variable, level, year, dataset.num, method, noise, outcome),
             # TODO: vvv why comment this line out? vvv
             # rmse = caret::RMSE(satt, true),
             across(c(true, satt, bias:width, lower.90, upper.90), 
@@ -244,7 +299,8 @@ bart_perf <- bart_satt_ests %>%
 ```{r}
 # One large dataset for comparing all evals
 evals_compare <- acic_winners.df %>% 
-  select(-DGP_name) %>% 
+  # mutate(noise = FALSE) %>% 
+  # select(-DGP_name) %>% 
   rbind(curia_eval.datasets) %>% 
   rbind(bart_perf) %>% 
   left_join(n.patients.combined, by = c("dataset.num", "variable", "id.practice", "level", "year")) %>% 
@@ -257,6 +313,13 @@ evals_compare
 
 ```
 
+```{r, eval=FALSE}
+evals_compare %>% 
+  filter(variable == 'Overall', is.na(year)) %>% 
+  write_csv("Data/all_methods_overall.csv")
+
+```
+
 
 # Analysis and plots
 
@@ -264,7 +327,7 @@ evals_compare
 data.plot <- evals_compare %>% 
   # Summarize across datasets
   summarise(
-    .by = c(variable, level, year, method, `Confounding Strength`),
+    .by = c(variable, level, year, method, `Confounding Strength`, noise, outcome),
     subgroup_size = mean(n.patients, na.rm = TRUE),
     rmse = caret::RMSE(satt, true),
     across(c(bias, abs_bias, cover, width), ~weighted.mean(., n.patients))
@@ -282,30 +345,33 @@ data.plot <- evals_compare %>%
     # method = factor(method, levels = rev(c('curia', 'BART', 'DART', 
     #                                        setdiff(unique(method), 
     #                                                c('curia', 'BART', 'DART'))))),
-    method = factor(method, levels = rev(c('curia', 'BART', 'DART', '_ps_BART', '_ps_DART', '_pd_sd_BART', '_ps_sd_DART', '_ps_sd_2l_BART', '_ps_sd_2l_DART', setdiff(unique(method), c('curia', 'BART', 'DART', '_ps_BART', '_ps_DART', '_pd_sd_BART', '_ps_sd_DART', '_ps_sd_2l_BART', '_ps_sd_2l_DART'))))),
+    # method = factor(method, levels = rev(c('curia', 'BART', 'DART', '_ps_BART', '_ps_DART', '_pd_sd_BART', '_ps_sd_DART', '_ps_sd_2l_BART', '_ps_sd_2l_DART', setdiff(unique(method), c('curia', 'BART', 'DART', '_ps_BART', '_ps_DART', '_pd_sd_BART', '_ps_sd_DART', '_ps_sd_2l_BART', '_ps_sd_2l_DART'))))),
     # Sensible method labelling
     method_label = case_match(method, 
                               'curia' ~ 'curia', 
-                              # 'BART' ~ 'BART',
-                              # 'DART' ~ 'DART',
-                              'b_ps_BART' ~ 'ps_BART',
-                              'b_ps_DART' ~ 'ps_DART',
-                              'b_ps_sd_BART' ~ 'ps_sd_BART',
-                              'b_ps_sd_DART' ~ 'ps_sd_DART',
-                              'b_ps_sd_2l_BART' ~ 'ps_sd_2l_BART',
-                              'b_ps_sd_2l_DART' ~ 'ps_sd_2l_DART',
-                              .default = 'other')
+                              'BART' ~ 'BART',
+                              'DART' ~ 'DART',
+                              'ps_BART' ~ 'ps_BART',
+                              'ps_DART' ~ 'ps_DART',
+                              'ps_sd_BART' ~ 'ps_sd_BART',
+                              'ps_sd_DART' ~ 'ps_sd_DART',
+                              'ps_sd_2l_BART' ~ 'ps_sd_2l_BART',
+                              'ps_sd_2l_DART' ~ 'ps_sd_2l_DART',
+                              .default = 'other'),
+    variant = ifelse(noise, '10x', ifelse(outcome == 'ydiff', 'ydiff', 'baseline'))
   )
 
-data.plot
+# data.plot
 
+# method_colors <- c(Curia = "#F8766D", Oracle = "#00BFC4", Other = "darkgrey", 
+#                    BART = '#4356FF', DART = '#AB54F9')
 method_colors <- c(Curia = "#F8766D", Oracle = "#00BFC4", Other = "darkgrey", 
-                   BART = '#4356FF', DART = '#AB54F9')
-method_colors <- c(Curia = "#F8766D", Oracle = "#00BFC4", Other = "darkgrey", 
-                   `_ps_BART` = '#4356FF', `_ps_DART` = '#AB54F9',
-                   `_ps_sd_BART` = '#43569F', `_ps_sd_DART` = '#AB5499',
-                   `_ps_sd_2l_BART` = '#43563F', `_ps_sd_2l_DART` = '#AB5439')
+                   `ps_BART` = '#4356FF', `ps_DART` = '#AB54F9',
+                    BART = "yellow", DART = "orange",
+                   `ps_sd_BART` = '#43569F', `ps_sd_DART` = '#AB5499',
+                   `ps_sd_2l_BART` = '#43563F', `ps_sd_2l_DART` = '#AB5439')
 method_colors2 <- c(curia = "#F8766D", oracle = "#00BFC4", other = "darkgrey", 
+                    BART = "yellow", DART = "orange",
                    `ps_BART` = '#4356FF', `ps_DART` = '#AB54F9',
                    `ps_sd_BART` = '#93b69F', `ps_sd_DART` = '#fB0499',
                    `ps_sd_2l_BART` = '#43f63F', `ps_sd_2l_DART` = '#AB5439')
@@ -314,10 +380,15 @@ method_colors2 <- c(curia = "#F8766D", oracle = "#00BFC4", other = "darkgrey",
 ```
 
 ```{r}
-ggplot(data = data.plot, aes(x = subgroup_size, y = rmse)) + 
-         geom_line(aes(group = method, color = method_label)) +
+ggplot(mapping = aes(group = method, x = subgroup_size, y = rmse, color = method_label)) + 
+  geom_line(data = filter(data.plot, method_label == 'other')) +
+  geom_line(data = filter(data.plot, method_label != 'other', noise == FALSE, outcome == 'ywavg')) +
+  geom_line(data = filter(data.plot, method_label != 'other', noise == TRUE), linetype = 2) +
+  geom_line(data = filter(data.plot, method_label != 'other', noise == FALSE, outcome == 'ydiff'), linetype = 3) +
+         # geom_line(aes(group = method, color = method_label)) +
   # scale_color_manual(values = c(curia = 'darkblue', BART = 'darkred', DART = 'cyan', other = 'lightgray')) +
   scale_color_manual(values = method_colors2) +
+  #scale_linetype_identity(labels = c('10x', 'ydiff', 'base'), breaks = c(2, 3, 1), guide = guide_legend()) +
   facet_wrap(~ `Confounding Strength`) +
   scale_y_log10()
 ```
@@ -329,21 +400,24 @@ evals_compare %>%
                    rmse = caret::RMSE(satt, true), 
                    across(c(satt, true, bias, abs_bias, lower.90, upper.90, cover, width),
                           ~ weighted.mean(., n.patients))) %>%
-        write_csv("Data/eval_compare.csv")
+        write_csv("Data/eval_compare_10x.csv")
 ```
 
 ```{r}
 #method_groups = c('curia', keep(names(acic_winners), ~grepl("^t2", .)))
 
 map(c("rmse", "bias", "abs_bias", "cover", "width"), function(.x) {
-  ggplot(data = data.plot, aes(x = subgroup_size, y = !!sym(.x))) + 
-    geom_line(aes(group = method, color = method_label)) +
+  ggplot(mapping = aes(x = subgroup_size, y = !!sym(.x), group = method, color = method_label)) + 
+    geom_line(data = filter(data.plot, method_label == 'other')) +
+    geom_line(data = filter(data.plot, method_label != 'other', noise == FALSE, outcome == 'ywavg')) +
+    geom_line(data = filter(data.plot, method_label != 'other', noise == TRUE), linetype = 2) +
+    geom_line(data = filter(data.plot, method_label != 'other', noise == FALSE, outcome == 'ydiff'), linetype = 3) +
     # scale_color_manual(values = c(curia = 'darkblue', BART = 'darkred', DART = 'cyan', other = 'lightgray')) +
     scale_color_manual(values = method_colors2) +
     facet_wrap(~ `Confounding Strength`) +
     {if(.x %in% c("rmse")) scale_y_log10() else NULL} + 
     labs(title = .x)
-  ggsave(file = paste0("Plots/plot_", .x, "_by_subgroup_size.png"))
+  ggsave(file = paste0("Plots/plot_", .x, "_by_subgroup_size_10x.png"))
 })
 
 ```
@@ -370,14 +444,27 @@ oracle_row <- data.frame(
   abs_bias = 0
 )
 perf <- bind_rows(perf, oracle_row) %>% 
-  mutate(Method = case_match(
-    method,
-    'curia' ~ 'Curia',
-    'Oracle' ~ 'Oracle',
-    'BART' ~ 'BART',
-    'DART' ~ 'DART',
-    .default = "Other"
-  ))
+  mutate(Method = case_match(method, 
+                              'curia' ~ 'Curia', 
+                              'Oracle' ~ 'Oracle',
+                              'BART' ~ 'BART',
+                              'DART' ~ 'DART',
+                              'ps_BART' ~ 'ps_BART',
+                              'ps_DART' ~ 'ps_DART',
+                              'ps_sd_BART' ~ 'ps_sd_BART',
+                              'ps_sd_DART' ~ 'ps_sd_DART',
+                              'ps_sd_2l_BART' ~ 'ps_sd_2l_BART',
+                              'ps_sd_2l_DART' ~ 'ps_sd_2l_DART',
+                              .default = 'Other'),
+         noise = ifelse(is.na(noise), FALSE, noise))
+  # mutate(Method = case_match(
+  #   method,
+  #   'curia' ~ 'Curia',
+  #   'Oracle' ~ 'Oracle',
+  #   'BART' ~ 'BART',
+  #   'DART' ~ 'DART',
+  #   .default = "Other"
+  # ))
 
 # perf <- perf %>%
 #   mutate(Method = ifelse(method == 'curia', 'Curia', 
@@ -398,7 +485,7 @@ perf %>%
   summarise(percent_better = mean(rmse < curia_rmse, na.rm=T))
 
 perf %>%
-  ggplot(aes(x=rmse, y=cover, color=Method)) + 
+  ggplot(aes(x=rmse, y=cover, color=Method, shape=variant)) + 
   geom_hline(yintercept = 0.9, color='darkgrey') +
   geom_point() + 
   xlab('RMSE, overall SATT') +
@@ -408,15 +495,18 @@ perf %>%
 ggsave(file.path('Plots', 'rmse_cover.png'), height=3.5, width=4.5)
 
 perf %>%
-  ggplot(aes(x=width, y=cover, color=Method)) + 
+  ggplot(aes(x=width, y=cover, color=Method, shape = variant)) + 
   geom_hline(yintercept = 0.9, color='darkgrey')+
   geom_point() + 
   xlab('Width of overall SATT 90% interval') +
   ylab('Coverage of overall SATT 90% interval') +
   facet_wrap(~ `Confounding Strength`) +
   scale_color_manual(values=method_colors)
-ggsave(file.path("Plots", 'width_cover.png'), height=3.5, width=4.5)
+ggsave(file.path("Plots", 'width_cover_10x.png'), height=3.5, width=4.5)
 
 ```
 
+```{r}
+data.plot %>% filter()
+```
 

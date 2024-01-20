@@ -6,6 +6,10 @@
 *.Rproj
 .RDataTmp
 
+# Notebook outputs
+*.spin.*
+*.html
+
 # Data file types and locations
 *.rds
 *.csv
@@ -20,3 +24,7 @@ Data/*
 
 # Obsidian Vault
 BCBS Consulting/*
+
+# Key files
+*.pem
+*.ppk

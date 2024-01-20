@@ -1,17 +1,32 @@
-#' This script runs BART and DART on ACIC-formatted data (or related files,
-#' e.g., from curia). It provides functions to for pre- and post-processing of
-#' data for and from BART fits, and a main function and loop at the bottom to do
-#' so for the relevant datasets.
-#' 
-#' Created by Adelin Kassler, Nov 2023
-#' 
-#' Last updated by Adelin Kassler, Dec 2023
+---
+title: "R Notebook"
+output: html_notebook
+---
 
+Preprocess all the data we need so we're just loading a premade dataset instead of making it at runtime
+
+# Setup & functions
+
+Global data
+
+```{r}
+sdY.df <- readRDS("sdY.rds")
+
+```
+
+Global functions
+
+```{r}
 library(caret)
 library(glue)
 library(testthat)
 library(BART)
-library(tidyverse)
+# library(tidyverse)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(readr)
+library(tibble)
 
 
 # Global parameters -------------------------------------------------------
@@ -28,6 +43,14 @@ params <- list(
     keepevery = 5
   )
 )
+
+if (!interactive()) {
+  idx_skip <- as.numeric(commandArgs(TRUE)[1])
+  idx_offset <- as.numeric(commandArgs(TRUE)[2])
+} else {
+  idx_skip <- 1
+  idx_offset <- 1
+}
 
 
 # Processing curia data ---------------------------------------------------
@@ -75,10 +98,12 @@ strings_to_factors <- function(x) {
   mutate(x, across(where(is.character), as.factor))
 }
 
-get_sd_y_practice <- function(x, patient_path) {
-  patient.df <- read_csv(patient_path)
+add_sd_y_practice <- function(x, dsnum) {
+  #patient.df <- read_csv(patient_path)
+  #patient.df <- readRDS("sdY.rds")
+  # Unnecessary because patient.df now loaded globally
   
-  #TODO: download track 1 data to get patient information
+  left_join(x, sdY.df %>% filter(as.numeric(dataset.num) == dsnum))
 }
 
 format_practice_year_wide <- function(practice_year) {
@@ -225,9 +250,11 @@ get_all_estimates <- function(pred.diff, .data) {
   
 }
 
+```
 
-# Main --------------------------------------------------------------------
+Main loop
 
+```{r}
 main.curia_merged <- function(data_path) {
   # merged_data_path <- glue("Data/curia_data/df_merged_raw_practice_level_10x/",
   #                       "merged_dataset_practice_{dataset_num}b.csv")
@@ -237,36 +264,108 @@ main.curia_merged <- function(data_path) {
     rename(Y = label, n.patients = n_patients_in_practice) %>% 
     select(-mo)
   
+  dsnum <- parse_number(basename(data_path))
+  
   practice <- select_practice_level(merged_data)
   practice_year <- select_practice_year_level(merged_data)
   
   data <- join_practice_level(
     practice_year = practice_year %>% format_practice_year_wide(),
-    practice = practice %>% add_pscores()
+    practice = practice %>% add_pscores() %>% add_sd_y_practice(dsnum)
   )
+  dataset_name <- basename(data_path) %>% sub('\\..*$', '', .)
+  saveRDS(data, glue("Save/wide/wide_{dataset_name}.rds"))
   
   # TODO: we need longer burn-in for bart, and especially dart
   # 100->200 for bart
   # for dart, needs iteration
   # skip, don't take more samples
   data.rhs <- as_rhs(data)
-  bart.fit <- gbart(data.rhs, data[['Y_avg.post']], sparse = F, 
+  bart.fit <- gbart(data.rhs, data[['Y_avg.post']], sparse = F,
                     nskip = params$bart$nskip, keepevery = params$bart$keepevery)
-  dart.fit <- gbart(data.rhs, data[['Y_avg.post']], sparse = T, 
+  dart.fit <- gbart(data.rhs, data[['Y_avg.post']], sparse = T,
                     nskip = params$dart$nskip, keepevery = params$dart$keepevery)
-  
-  pdep_post.bart <- pdep(bart.fit, data)
-  pdep_post.dart <- pdep(dart.fit, data)
-  
-  bart.ests <- get_all_estimates(pdep_post.bart, data)
-  dart.ests <- get_all_estimates(pdep_post.dart, data)
-  
-  dataset_name <- basename(data_path) %>% sub('\\..*$', '', .)
-  
   saveRDS(bart.fit, glue("Save/fits/fit_{dataset_name}_BART.rds"))
   saveRDS(dart.fit, glue("Save/fits/fit_{dataset_name}_DART.rds"))
+
+  pdep_post.bart <- pdep(bart.fit, data)
+  pdep_post.dart <- pdep(dart.fit, data)
   saveRDS(pdep_post.bart, glue("Save/pdep_post/pdep_{dataset_name}_BART.rds"))
   saveRDS(pdep_post.dart, glue("Save/pdep_post/pdep_{dataset_name}_DART.rds"))
+
+  bart.ests <- get_all_estimates(pdep_post.bart, data)
+  dart.ests <- get_all_estimates(pdep_post.dart, data)
+  write_csv(bart.ests, glue("Data/analyzed/{dataset_name}_BART.csv"))
+  write_csv(dart.ests, glue("Data/analyzed/{dataset_name}_DART.csv"))
+  
+  return(NULL)
+}
+
+dur <- c()
+for (path in dir("Data/curia_data/df_merged_raw_practice_level_10x/", 
+                 full.names = TRUE)) {
+  message(glue("(Run #{length(dur)+1}) Working on {path}..."))
+  start <- Sys.time()
+  try(main.curia_merged(path))
+  dur <- append(dur, Sys.time() - start)
+  message(glue("Completed in {format(dur[length(dur)])}"))
+}
+
+```
+
+
+```{r message=FALSE}
+dataset_nums <- read_csv("Data/curia_data/dataset_nums.csv") %>% 
+  pull(dataset_num)
+
+dataset_paths <- tibble(
+  practice = dir("Data/track2_20220404/practice/", full.names = TRUE),
+  practice_year = dir("Data/track2_20220404/practice_year/", full.names = TRUE),
+  number = 1:3400
+) %>% 
+  filter(number %in% as.numeric(dataset_nums))
+```
+
+```{r}
+main.track2 <- function(dsnum) {
+  dsnum <- as.numeric(dsnum)
+  browser()
+  
+  practice_year <- dataset_paths$practice_year[dsnum] %>% 
+    read_csv() %>% 
+    strings_to_factors()
+    
+  practice <- dataset_paths$practice[dsnum] %>% 
+    read_csv() %>% 
+    strings_to_factors()
+  
+  data <- join_practice_level(
+    practice_year = practice_year %>% format_practice_year_wide(),
+    practice = practice %>% add_pscores() %>% add_sd_y_practice(dsnum)
+  )
+
+  dataset_name <- basename(data_path) %>% sub('\\..*$', '', .)
+  saveRDS(data, glue("Save/wide/wide_{dataset_name}.rds"))
+  
+    # TODO: we need longer burn-in for bart, and especially dart
+  # 100->200 for bart
+  # for dart, needs iteration
+  # skip, don't take more samples
+  data.rhs <- as_rhs(data)
+  bart.fit <- gbart(data.rhs, data[['Y_avg.post']], sparse = F,
+                    nskip = params$bart$nskip, keepevery = params$bart$keepevery)
+  dart.fit <- gbart(data.rhs, data[['Y_avg.post']], sparse = T,
+                    nskip = params$dart$nskip, keepevery = params$dart$keepevery)
+  saveRDS(bart.fit, glue("Save/fits/fit_{dataset_name}_BART.rds"))
+  saveRDS(dart.fit, glue("Save/fits/fit_{dataset_name}_DART.rds"))
+
+  pdep_post.bart <- pdep(bart.fit, data)
+  pdep_post.dart <- pdep(dart.fit, data)
+  saveRDS(pdep_post.bart, glue("Save/pdep_post/pdep_{dataset_name}_BART.rds"))
+  saveRDS(pdep_post.dart, glue("Save/pdep_post/pdep_{dataset_name}_DART.rds"))
+
+  bart.ests <- get_all_estimates(pdep_post.bart, data)
+  dart.ests <- get_all_estimates(pdep_post.dart, data)
   write_csv(bart.ests, glue("Data/analyzed/{dataset_name}_BART.csv"))
   write_csv(dart.ests, glue("Data/analyzed/{dataset_name}_DART.csv"))
   
@@ -275,36 +374,13 @@ main.curia_merged <- function(data_path) {
 
 dur <- c()
 cap <- list()
-for (path in dir("Data/curia_data/df_merged_raw_practice_level_10x/", 
-                 full.names = TRUE)[1]) {
-  message(glue("(Run #{length(dur)+1}) Working on {path}..."))
+for (number in dataset_paths$number) {
+  message(glue("(Run #{length(dur)+1}) Working on {number}..."))
   start <- Sys.time()
-  try(cap <- append(cap, list(quietly(main.curia_merged)(path))))
+  try(cap <- append(cap, list(quietly(main.track2)(number))))
   dur <- append(dur, Sys.time() - start)
   message(glue("Completed in {format(dur[length(dur)])}"))
 }
 
+```
 
-# Runtime stats -----------------------------------------------------------
-
-#' Summarize runtimes with key stats and graphs
-# Trimming durations avoids outsized impact of, eg, closing lid of laptop during
-# a long string of runs
-avg_dur <- mean(dur, trim = floor(log10(length(dur))) / length(dur))
-dur_quant <- paste(c("Min", '25%', "Med", '75%', "Max"),
-                   format(as.numeric(quantile(dur, c(0, .25, .5, .75, 1))), digits = 3), 
-                   sep = ' = ', collapse = ', ')
-message(glue("Completed {length(dur)} runs\nMean duration/run = {format(avg_dur,",
-             "digits = 3)}\nQuantiles: {dur_quant}"))
-
-hist(as.numeric(dur), main = "Histogram of Runtimes", xlab = "Runtime")
-abline(v = avg_dur, col = 'red')
-
-#' Captured output:
-for (x in cap) {
-  cat(x$output)
-  if (length(x$warnings)>0) warning(x$warnings)
-}
-
-#' Save environment for inspection
-# save(file = 'Save/fit_bart_functional.rds')
