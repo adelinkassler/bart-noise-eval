@@ -116,6 +116,7 @@ n.patients.by_X <- map(1:5, function(i) {
 # Create one dataframe to merge
 n.patients.combined <- bind_rows(n.patients.overall, n.patients.by_practice, 
                                  n.patients.by_X, n.patients.by_year)
+saveRDS(n.patients.combined, "Save/n_patients_combined.rds")
 
 # Output of this chunk shows an abridged version of what n.patients.combined looks like
 n.patients.combined %>% 
@@ -144,12 +145,18 @@ acic_winners <- readRDS("Data/eval_simple_tosend.RDS")
 acic_winners.df <- names(acic_winners) %>% 
   #keep(~ grepl("^t2", .x)) %>% 
   map(~ acic_winners[[.x]]$eval %>% mutate(method = .x)) %>%
-  list_rbind() %>% 
-  select(-DGP_name) %>% 
-  mutate(noise = FALSE,
-         outcome= 'ywavg')
+  list_rbind()# %>% 
+  # select(-DGP_name, -id.practice) %>% 
+  # mutate(noise = FALSE)
+
+saveRDS(acic_winners.df, "Save/acic_winners_performance.rds")
 
 ```
+
+```{r}
+acic
+```
+
 
 
 ## Curia
@@ -171,19 +178,21 @@ curia_estimates_10x <- dir("Data/curia_results/satt_results_10x/", full.names = 
   map(~ read_csv(.x)) %>%
   list_rbind() %>% 
   mutate(dataset.num = sprintf("%04d", dataset.num)) %>% 
-  mutate(noise = TRUE, outcome = 'ywavg')
+  mutate(noise = TRUE)
 
 curia_estimates <- bind_rows(curia_estimates, curia_estimates_10x)
 
 
 # Write for quick loading
-write_csv(curia_estimates, "Data/formatted/all_curia_estimates_10x.csv")
+write_csv(curia_estimates, "Data/formatted/all_curia_estimates_1x_10x.csv")
+saveRDS(curia_estimates, "Save/all_curia_estimates_1x_10x.rds")
 
 ```
 
 ```{r, message=FALSE}
 # Load results of previous chunk
-curia_estimates <- read_csv("Data/formatted/all_curia_estimates_10x.csv")
+# curia_estimates <- read_csv("Data/formatted/all_curia_estimates_10x.csv")
+curia_estimates <- readRDS("Save/all_curia_estimates_1x_10x.rds")
    
 
 ```
@@ -222,9 +231,11 @@ curia_eval.datasets <- combined_ests %>%
   summarise(.by = c(variable, level, year, dataset.num, noise),
             # rmse = caret::RMSE(satt, true),
             across(c(true, satt, se, bias, abs_bias, width, lower.90, upper.90, cover), ~ weighted.mean(.x, n.patients))) %>% 
-  mutate(id.practice = NA,
-         outcome = 'ywavg',
-         method = "curia")
+  mutate(method = "curia")
+```
+
+```{r}
+saveRDS(curia_eval.datasets, "Save/curia_performance.rds")
 ```
 
 
@@ -250,6 +261,28 @@ bart_satt_ests <- bart_satt_ests.l %>%
 saveRDS(bart_satt_ests, "Save/bart_satt_ests_600_1x_extended.rds")
 #rm(bart_satt_ests.l)
 ```
+
+```{r, message=FALSE, eval=FALSE}
+bart_satt_ests.l <- dir("Data//run_all_loops/", full.names = TRUE) %>%
+  keep(~ !file.info(.x)$isdir) %>% 
+  keep(~ file.info(.x)$size > 10) %>% 
+  grep('[0-9]{4}b?(_ydiff_w)?_ps', ., value = TRUE) %>% 
+  map(function(x) {
+    df <- read_csv(x)
+    # tryCatch(read_csv(x), error = function(e) esc <<- TRUE)
+    df$method <- sub('^.*[0-9]{4}(.*)\\.csv$', '\\1', x)
+    df$dataset.num <- sub('.*([0-9]{4}).*', '\\1', x)
+    df$level <- as.character(df$level)
+    return(df)
+  }) 
+bart_satt_ests <- bart_satt_ests.l %>%
+  list_rbind() #%>%
+  #mutate(dataset.num = sprintf("%.04s", dataset.num))
+
+saveRDS(bart_satt_ests, "Save/bart_satt_ests_600_1x_extended.rds")
+#rm(bart_satt_ests.l)
+```
+
 
 ```{r, message=FALSE}
 # bart_satt_ests <- readRDS("Save/bart_satt_ests_600_1x.rds")

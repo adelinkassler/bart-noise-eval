@@ -32,3 +32,17 @@ output0 <- bind_rows(output)
 write_csv(output0, "~/Documents/Consulting/BCBS/Data/formatted/sdY.csv")
 ```
 
+```{r}
+walk(1:3400, function(n) {
+  dsn <- sprintf("%04d", n)
+  saveRDS(output[[n]], file = glue("~/Documents/Consulting/BCBS/Data/formatted/track1_sdy/acic_practice_{dsn}_sdy.rds"))
+})
+```
+
+```{r}
+walk(1:3400, function(n) {
+  dsn <- sprintf("%04d", n)
+  write_csv(output[[n]], file = glue("~/Documents/Consulting/BCBS/Data/formatted/track1_sdy/acic_practice_{dsn}_sdy.csv"))
+})
+```
+
