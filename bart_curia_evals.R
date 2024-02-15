@@ -5,6 +5,7 @@
 
 
 suppressPackageStartupMessages({
+  library(beepr)
   library(caret)
   library(glue)
   library(testthat)
@@ -20,13 +21,23 @@ suppressPackageStartupMessages({
 })
 
 source("utils_eval.R")
-
+base_error_handler <- options("error")
+loud_error_handler <- function() {
+  beep(9)
+  # Calling base error handler
+  if (!is.null(old_error_handler) && is.function(old_error_handler$error)) {
+    old_error_handler$error()
+  }
+}
+options(error = loud_error_handler)
 
 # Load fixed datasets -----------------------------------------------------
 
-estimand_truths <- read_csv("Data/ACIC_estimand_truths.csv")
+focus_datasets <- read_csv("Data/curia_data/dataset_nums.csv", show_col_types = FALSE)
+estimand_truths <- read_csv("Data/ACIC_estimand_truths.csv", show_col_types = FALSE)
 n.patients.combined <- readRDS("Save/n_patients_combined.rds")
 acic_winners_evals <- readRDS("Save/acic_winners_performance.rds")
+mpr_bart_evals.l <- readRDS("Save/mathematica_bart_models.rds")
   
 # curia_evals <- readRDS("Save/curia_performance.rds")
 curia_estimates <- readRDS("Save/all_curia_estimates_1x_10x.rds")
@@ -35,7 +46,7 @@ dgp_levels <- full_join(
   estimand_truths %>% 
     select(dataset.num:`Idiosyncrasy of Impacts`) %>% 
     distinct(),
-  acic_winners.df %>% 
+  acic_winners_evals %>% 
     distinct(DGP_name, dataset.num)
 )
 
@@ -134,9 +145,13 @@ add_cols_to_bart_ests <- function(bart_ests) {
     select(-path, -se) #score_submission has rename(se=rmse)
 }
 
-bart_ests_refactor <- get_bart_ests("Data/estimates/default/", pattern = "/ests") %>% 
-  mutate(version = 'refactor')
-bart_ests <- add_cols_to_bart_ests(bart_ests_refactor)
+bart_ests_default <- get_bart_ests("Data/estimates/default/", pattern = "/ests") %>% mutate(version = 'default')
+bart_ests_nops <- get_bart_ests("Data/estimates/nops/", pattern = "/ests") %>% mutate(version = 'nops')
+bart_ests_nosdy <- get_bart_ests("Data/estimates/nosdy/", pattern = "/ests") %>% mutate(version = 'nosdy')
+bart_ests_nops_nosdy <- get_bart_ests("Data/estimates/nops_nosdy/", pattern = "/ests") %>% mutate(version = 'nops_nosdy')
+
+bart_ests_rbind <- bind_rows(bart_ests_default, bart_ests_nops, bart_ests_nosdy, bart_ests_nops_nosdy)
+bart_ests <- add_cols_to_bart_ests(bart_ests_rbind)
 
 # Preprocess, combine curia -----------------------------------------------
 
@@ -146,7 +161,8 @@ curia_ests <- curia_estimates %>%
   select(-n_columns, -SATT, -any_of(dgp_vars)) %>% 
   mutate(lower.90 = satt - qnorm(.95) * se,
          upper.90 = satt + qnorm(.95) * se) %>% 
-  select(-se) #score_submission has rename(se=rmse)
+  select(-se) %>% #score_submission has rename(se=rmse)
+  filter(dataset.num %in% focus_datasets$dataset_num)
 
 #' The curia estimates are now in the same form as the bart estimates, which we
 #' can confirm with:
@@ -156,69 +172,36 @@ expect_equal(length(unlist(xor.names(curia_ests, bart_ests))), 0)
 # Evals for BART and Curia ------------------------------------------------
 
 truths <- estimand_truths %>%
-  left_join(distinct(acic_winners.df, DGP_name, dataset.num)) %>% 
+  left_join(distinct(acic_winners_evals, DGP_name, dataset.num)) %>% 
   select(dataset.num, DGP_name, variable, level, year, id.practice, true = SATT)
 
 bart_curia_ests <- rbind(bart_ests, curia_ests)
-.tmp <- 
 
-bart_curia_evals.l <- bart_curia_ests %>% 
-  group_split(version, noise, method) %>% 
-  map(score_submission, truths=truths)# %>% 
-  # list_rbind()
-bart_curia_evals.df <- bart_curia_evals.l %>% 
-  map("eval") %>% 
-  list_rbind()
-
-.tmp <- bart_curia_ests %>% 
+scores.df <- bart_curia_ests %>% 
   nest_by(version, noise, method) %>% 
-  mutate(score = map(data, \(d) score_submission(d, truths=truths)))
-  
+  mutate(score = list(score_submission(data, truths=truths))) %>% 
+  unnest_wider(score)
 
-# > names(bart_curia_evals.l[[1]])
-# [1] "overall" "dgp_level" "eval" "exemplars" "sensspec"
+saveRDS(scores.df, "Save/bart_curia_full_scores.rds")
 
-# Scratch -----------------------------------------------------------------
+bart_curia_evals <- scores.df %>% 
+  select(version, noise, method, eval) %>% 
+  unnest(eval) %>% 
+  left_join(n.patients.combined) %>% 
+  left_join(dgp_levels)
 
-# Why can't I rbind?
-View(map(bart_curia_evals.l, "dgp_level")[[1]])
-
-
-
-
-# score_submission(test_results, truths)
-
-
-# make_evals <- function(ests_df) {
-#   ests_df %>% 
-#     # Merge on the truth
-#     left_join(estimand_truths %>% 
-#                 filter(is.na(year)), 
-#               by = c("dataset.num", "variable", "level", "year", "id.practice"),
-#               suffix = c(".ests", "")) %>% 
-#     select(!ends_with(".ests")) %>% 
-#     rename(true = SATT) %>% 
-#     left_join(n.patients.combined, by = c("dataset.num", "variable", "level", "year", "id.practice")) %>% 
-#     # filter(dataset.num %in% dataset_nums) %>% 
-#     mutate(bias = true - satt,
-#            abs_bias = abs(bias),
-#            cover = between(true, lower.90, upper.90),
-#            width = upper.90 - lower.90)
-# }
-# 
-# bart_curia_ests <- rbind(bart_ests, curia_ests)
-# bart_curia_evals <- make_evals(bart_curia_ests)
-
+saveRDS(bart_curia_evals, "Save/bart_curia_evals.rds")
 
 # Combine w/ acic, summarize ----------------------------------------------
 
-acic_winners_evals_ <- acic_winners_evals %>% 
+all_evals <- acic_winners_evals %>% 
   left_join(n.patients.combined) %>% 
   left_join(dgp_levels) %>% 
   mutate(version = "fixed") %>% 
-  filter(!(method %in% c('t1_rBARTimpT', 'ofpsbart', 't1_H-TMLE')))
+  filter(!(method %in% c('t1_rBARTimpT', 'ofpsbart', 't1_H-TMLE'))) %>% 
+  bind_rows(bart_curia_evals)
 
-all_evals <- rbind(bart_curia_evals, acic_winners_evals_)
+saveRDS(all_evals, "Save/all_evals.rds")
 
 # summarize_evals <- function(evals) {
 #   evals %>% 
@@ -236,46 +219,5 @@ all_evals <- rbind(bart_curia_evals, acic_winners_evals_)
 # 
 # all_evals_summ <- summarize_evals(all_evals)
 
-# Make datasets for plotting ----------------------------------------------
-
-plotting_data <- all_evals_summ %>% 
-  # Create sensible variables for visualization
-  mutate(
-    # So we can treat all subgroups with the same variable
-    variable_level = paste0(variable, 
-                            ifelse(is.na(level), '', paste0('_', level)),
-                            ifelse(is.na(year), '', paste0('_y', year))),
-    # Sensible method labelling
-    method_label = ifelse(grepl("(curia)|(BART)|(DART)", method), method, "other")#,
-    #variant = ifelse(noise, '10x', ifelse(outcome == 'ydiff', 'ydiff', 'baseline'))
-  )
-
-method_colors <- c(other = 'lightgray', curia = 'green4', BART = 'red2', DART = 'blue3')
-
-# Make line plots ---------------------------------------------------------
-
-map(c("rmse", "bias", "abs_bias", "cover", "width"), function(.x) {
-  ggplot(mapping = aes(x = n.practices, y = !!sym(.x), group = method, color = method_label)) + 
-    geom_line(data = filter(plotting_data, method_label == 'other')) +
-    geom_line(data = filter(plotting_data, method_label != 'other', noise == FALSE)) +
-    geom_line(data = filter(plotting_data, method_label != 'other', noise == TRUE), linetype = 2) +
-    scale_color_manual(values = method_colors) +
-    facet_wrap(~ `Confounding Strength`) +
-    {if(.x %in% c("rmse")) scale_y_log10() else NULL} + 
-    labs(title = .x)
-  ggsave(file = paste0("Plots/default/plot_", .x, "_by_subgroup_size.png"))
-})
-
-
-# Scratchpad --------------------------------------------------------------
-
-truths <- estimand_truths %>%
-  left_join(distinct(acic_winners.df, DGP_name, dataset.num)) %>% 
-  select(dataset.num, DGP_name, variable, level, year, id.practice, true = SATT)
-
-test_results <- {bart_curia_ests %>% 
-  group_split(version, noise, method)}[[1]]
-
-score_submission(test_results, truths)
-
-
+message("Completed successfully")
+beep(8)

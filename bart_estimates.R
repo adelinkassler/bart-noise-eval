@@ -9,6 +9,7 @@
 # Setup -------------------------------------------------------------------
 
 suppressPackageStartupMessages({
+  library(progress)
   library(caret)
   library(glue)
   library(testthat)
@@ -18,7 +19,8 @@ suppressPackageStartupMessages({
 
 focus_datasets <- read_csv("Data/curia_data/dataset_nums.csv", show_col_types = FALSE)
 
-main_args_df <- focus_datasets %>% 
+main_args_df <- map(c("default", "nosdy"), 
+                    \(x) {focus_datasets %>% 
   uncount(2) %>% 
   mutate(
     i = 1:n(),
@@ -28,9 +30,11 @@ main_args_df <- focus_datasets %>%
       p == '10x' ~ "curia_10x"
     ),
     data_file = glue("Data/model_ready/default/patient_wide_preproc_{dataset_num}_{suffix}.rds"),
-    pdep_file = glue("Save/default/pdep_post/pdep_patient_wide_preproc_{dataset_num}_{suffix}_{method}.rds"),
-    out_file = glue("Data/estimates/default/ests_{dataset_num}_{suffix}_{method}.rds")
+    pdep_file = glue("Save/{x}/pdep_post/pdep_patient_wide_preproc_{dataset_num}_{suffix}_{method}.rds"),
+    out_file = glue("Data/estimates/{x}/ests_{dataset_num}_{suffix}_{method}.rds")
   )
+}) %>% bind_rows() %>% 
+  mutate(i = 1:n())
 
 # Handle command line parameters ------------------------------------------
 
@@ -152,14 +156,27 @@ calc_all_subset_ests <- function(pdep_post, data) {
 # Run functions on all arguments ------------------------------------------
 
 n_runs <- nrow(main_args_df)
+
+# Set up progress bar
+pb <- progress_bar$new(
+  format = ":current/:total in :elapsed [:bar] eta: :eta\n", 
+  total = n_runs,
+  show_after = 0
+)
+invisible(pb$tick(0))
+
+# Loop over arguments
 pwalk(
   main_args_df,
   function(pdep_file, data_file, out_file, dataset_num, p, method, i, ...) {
-    message(glue("*****(#{i}/{n_runs} at {Sys.time}) Calculating estimates for dataset={dataset_num}, cols={p}, method={method}*****"))
+    # message(glue("\n***** #{i}/{n_runs} at {format(Sys.time())} *****\n",
+    #              "Calculating estimates for dataset={dataset_num}, cols={p}, method={method}",
+    #              "\n**********\n"))
     pdep <- readRDS(pdep_file)
     data <- readRDS(data_file)
     ests <- calc_all_subset_ests(pdep, data)
     saveRDS(ests, out_file)
+    pb$tick()
     }
 )
 

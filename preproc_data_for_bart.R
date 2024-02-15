@@ -8,6 +8,7 @@
 
 .version.params <- list(
   name = "default",
+  runtime = Sys.time(),
   notes = NULL,
   sdy = TRUE,
   pscores = TRUE,
@@ -23,12 +24,19 @@
 )
 
 suppressPackageStartupMessages({
-  library(magrittr)
+  # QoL
   library(yaml)
-  library(caret)
-  library(glue)
   library(testthat)
+  library(progress)
+  library(spsUtils)
+  
+  # Computational tools
   library(BART)
+  library(caret)
+  
+  # General use
+  library(magrittr)
+  library(glue)
   library(tidyverse)
 })
 
@@ -157,7 +165,7 @@ add_pscores <- function(x, method = 'BART') {
   }
   
   x %>% 
-    mutate(pscore = fit$yhat.train.mean)
+    mutate(pscore = colMeans(fit$yhat.train))
 }
 
 join_practice_level <- function(practice, practice_year) {
@@ -250,18 +258,30 @@ write_yaml(.version.params, file.path(dir_path, "PARAMETERS.yml"))
 focus_datasets <- read_csv("Data/curia_data/dataset_nums.csv", show_col_types = FALSE)
 
 acic_dsnums <- focus_datasets$dataset_num[focus_datasets$p == '1x']
+pb <- progress_bar$new(
+  format = ":current/:total in :elapsed [:bar] eta: :eta\n",
+  total = length(acic_dsnums)
+)
+pb$tick(0)
 iwalk(acic_dsnums, function(dsnum, i) {
-  elapsed <- my_timer(preproc_data(
+  quiet(preproc_data(
     acic_practice_path = glue("~/Documents/Consulting/BCBS/Data/track2_20220404/practice/acic_practice_{dsnum}.csv"),
     acic_practice_year_path = glue("~/Documents/Consulting/BCBS/Data/track2_20220404/practice_year/acic_practice_year_{dsnum}.csv")
   ))
-  message(glue("({i}/{length(acic_dsnums)}) Processed ACIC {dsnum} in {format(elapsed)}."))
+  pb$tick()
+  # message(glue("({i}/{length(acic_dsnums)}) Processed ACIC {dsnum} in {format(elapsed)}."))
 })
 
 curia_10x_dsnums <- focus_datasets$dataset_num[focus_datasets$p == '10x']
+pb <- progress_bar$new(
+  format = ":current/:total in :elapsed [:bar] eta: :eta\n",
+  total = length(curia_10x_dsnums)
+)
+pb$tick(0)
 iwalk(curia_10x_dsnums, function(dsnum, i) {
-  elapsed <- my_timer(preproc_data(
+  quiet(preproc_data(
     curia_merged_path = glue("~/Documents/Consulting/BCBS/Data/curia_data/df_merged_raw_practice_level_10x/merged_dataset_practice_{dsnum}b.csv")
   ))
-  message(glue("({i}/{length(curia_10x_dsnums)}) Processed Curia 10x {dsnum} in {format(elapsed)}."))
+  pb$tick()
+  # message(glue("({i}/{length(curia_10x_dsnums)}) Processed Curia 10x {dsnum} in {format(elapsed)}."))
 })

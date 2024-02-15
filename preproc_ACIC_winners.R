@@ -12,7 +12,8 @@ acic_winners <- readRDS("Data/eval_simple_tosend.RDS")
 acic_winners.df <- names(acic_winners) %>% 
   #keep(~ grepl("^t2", .x)) %>% 
   map(~ acic_winners[[.x]]$eval %>% mutate(method = .x)) %>%
-  list_rbind()# %>% 
+  list_rbind() %>% 
+  filter(!(method %in% c('t1_rBARTimpT', 'ofpsbart', 't1_H-TMLE')))
 # select(-DGP_name, -id.practice) %>% 
 # mutate(noise = FALSE)
 

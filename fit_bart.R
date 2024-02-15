@@ -33,14 +33,20 @@ for (arg in .arguments) {
       if (grepl("^[0-9]+$", value)) value <- as.numeric(value)
       if (grepl("^(true)|(false)$", value)) value <- as.logical(value)
       .version.params[[param]] <- value
+      message(paste("Setting", param, "to", value))
     }
   }
 }
 
 suppressPackageStartupMessages({
-  library(caret)
-  library(glue)
+  # QoL
+  library(spsUtils)
+  library(progress)
   library(testthat)
+  library(glue)
+  
+  # Computation
+  library(caret)
   library(BART)
   
   # library(tidyverse) Tidyverse doesn't load on AWS, individually loading
@@ -73,12 +79,11 @@ my_timer <- function (expr, gcFirst = TRUE) {
   structure(new.time - time, class = "difftime")
 }
 
-
-# Analysis helper funs ----------------------------------------------------
-
 strings_to_factors <- function(x) {
   mutate(x, across(where(is.character), as.factor))
 }
+
+# Analysis helper funs ----------------------------------------------------
 
 get_rhs_names <- function(x) {
   setdiff(names(x), c("Y_outcome", 'id.practice', 'dataset.num', 'Y_avg.post', 
@@ -194,22 +199,22 @@ run_fit_and_pred <- function(path) {
   
   data.rhs <- as_rhs(data)
   
-  bart.fit <- gbart(
+  bart.fit <- quietly(gbart)(
     data.rhs,
     data[['Y_outcome']],
     sparse = F,
     nskip = .version.params$stretch * .version.params$bart$nskip,
     keepevery = .version.params$stretch * .version.params$bart$keepevery,
     w = weights
-  )
-  dart.fit <- gbart(
+  )$result
+  dart.fit <- quietly(gbart)(
     data.rhs,
     data[['Y_outcome']],
     sparse = T,
     nskip = .version.params$stretch * .version.params$dart$nskip,
     keepevery = .version.params$stretch * .version.params$dart$keepevery,
     w = weights
-  )
+  )$result
   
   if (!dir.exists(glue("Save/{.version.params$name}"))) dir.create(glue("Save/{.version.params$name}"))
   
@@ -264,10 +269,20 @@ for (arg in .arguments) {
   }
 }
 paths <- sample(paths[grepl('(\\.rds)|(\\.csv)', paths)])
+
+pb <- progress_bar$new(
+  format = ":current/:total in :elapsed [:bar] eta: :eta\n", 
+  total = length(paths),
+  show_after = 0
+)
+invisible(pb$tick(0))
+
 message(glue("*****Fitting BART/DART models to {length(paths)} datasets.*****"))
 iwalk(paths, function(path, i) {
-  elapsed <- my_timer(run_fit_and_pred(path))
-  message(glue("*****({i}/{length(paths)}) Fit BART/DART to {path} in {format(elapsed)}.*****"))
+  # elapsed <- my_timer(run_fit_and_pred(path))
+  # message(glue("*****({i}/{length(paths)}) Fit BART/DART to {path} in {format(elapsed)}.*****"))
+  quiet(run_fit_and_pred(path))
+  pb$tick()
 })
 
 .version.params$exit_status <- 0
