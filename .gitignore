@@ -5,26 +5,30 @@
 .Ruserdata
 *.Rproj
 .RDataTmp
-
 # Notebook outputs
 *.spin.*
 *.html
-
 # Data file types and locations
 *.rds
 *.csv
 Data/*
-
-# Image file types
+Save/*
+# Binary file types
 *.png
-
+*.zip
+*.pdf
 # Misc special binaries
 .DS_Store
 *.nb.html
-
-# Obsidian Vault
+# Non-code folders
 BCBS Consulting/*
-
+Employment/*
 # Key files
 *.pem
 *.ppk
+# Temporary files
+tmp.*
+*.tmp
+tmp
+# Misc others
+bcf-1-feature-random-effects/
