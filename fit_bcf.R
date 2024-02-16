@@ -91,6 +91,219 @@ get_rhs_names <- function(x) {
 focus_datasets <- read_csv("Data/curia_data/dataset_nums.csv", show_col_types = FALSE)
 
 
+# Alternative BCF ---------------------------------------------------------
+
+# bcf <- function (y, z, x_control, x_moderate = x_control, pihat, w = NULL, 
+#           random_seed = sample.int(.Machine$integer.max, 1), n_chains = 4, 
+#           n_cores = n_chains, n_threads = max((RcppParallel::defaultNumThreads() - 
+#                                                  2)/n_cores, 1), nburn, nsim, nthin = 1, update_interval = 100, 
+#           ntree_control = 200, sd_control = NULL, base_control = 0.95, 
+#           power_control = 2, ntree_moderate = 50, sd_moderate = NULL, 
+#           base_moderate = 0.25, power_moderate = 3, save_tree_directory = ".", 
+#           log_file = file.path(".", sprintf("bcf_log_%s.txt", format(Sys.time(), 
+#                                                                      "%Y%m%d_%H%M%S"))), nu = 3, lambda = NULL, sigq = 0.9, 
+#           sighat = NULL, include_pi = "control", use_muscale = TRUE, 
+#           use_tauscale = TRUE, include_random_effects = FALSE, batch_size = 100, 
+#           block_v_rho = FALSE, block_batch_size = 100, block_b0_b1 = FALSE, 
+#           sigu_hyperprior = NULL, ate_prior_sd = NULL, hardcode_sigma_u = FALSE, 
+#           hardcode_sigma_v = FALSE, hardcode_rho = FALSE, hardcode_sigma_u_val = 0, 
+#           hardcode_sigma_v_val = 0, hardcode_rho_val = 0, rho_beta_prior = TRUE, 
+#           rho_beta_a = 2, rho_beta_b = 2, simplified_return = FALSE, 
+#           verbose = 1) 
+# {
+#   if (is.null(w)) {
+#     w <- matrix(1, ncol = 1, nrow = length(y))
+#   }
+#   pihat = as.matrix(pihat)
+#   if (!.ident(length(y), length(z), length(w), nrow(x_control), 
+#               nrow(x_moderate), nrow(pihat))) {
+#     stop("Data size mismatch. The following should all be equal:\n         length(y): ", 
+#          length(y), "\n", "length(z): ", length(z), "\n", 
+#          "length(w): ", length(w), "\n", "nrow(x_control): ", 
+#          nrow(x_control), "\n", "nrow(x_moderate): ", nrow(x_moderate), 
+#          "\n", "nrow(pihat): ", nrow(pihat), "\n")
+#   }
+#   if (any(is.na(y))) 
+#     stop("Missing values in y")
+#   if (any(is.na(z))) 
+#     stop("Missing values in z")
+#   if (any(is.na(w))) 
+#     stop("Missing values in w")
+#   if (any(is.na(x_control))) 
+#     stop("Missing values in x_control")
+#   if (any(is.na(x_moderate))) 
+#     stop("Missing values in x_moderate")
+#   if (any(is.na(pihat))) 
+#     stop("Missing values in pihat")
+#   if (any(!is.finite(y))) 
+#     stop("Non-numeric values in y")
+#   if (any(!is.finite(z))) 
+#     stop("Non-numeric values in z")
+#   if (any(!is.finite(w))) 
+#     stop("Non-numeric values in w")
+#   if (any(!is.finite(x_control))) 
+#     stop("Non-numeric values in x_control")
+#   if (any(!is.finite(x_moderate))) 
+#     stop("Non-numeric values in x_moderate")
+#   if (any(!is.finite(pihat))) 
+#     stop("Non-numeric values in pihat")
+#   if (!all(sort(unique(z)) == c(0, 1))) 
+#     stop("z must be a vector of 0's and 1's, with at least one of each")
+#   if (!(include_random_effects %in% c(TRUE, FALSE))) 
+#     stop("include_random_effects must be TRUE or FALSE")
+#   if (round(batch_size) != batch_size | batch_size < 1) 
+#     stop("batch_size must be an integer larger than 0")
+#   if (!(verbose %in% 0:4)) 
+#     stop("verbose must be an integer from 0 to 4")
+#   if (length(unique(y)) < 5) 
+#     warning("y appears to be discrete")
+#   if (nburn < 0) 
+#     stop("nburn must be positive")
+#   if (nsim < 0) 
+#     stop("nsim must be positive")
+#   if (nthin < 0) 
+#     stop("nthin must be positive")
+#   if (nthin > nsim + 1) 
+#     stop("nthin must be < nsim")
+#   if (nburn < 1000) 
+#     warning("A low (<1000) value for nburn was supplied")
+#   if (nsim * nburn < 1000) 
+#     warning("A low (<1000) value for total iterations after burn-in was supplied")
+#   if ((hardcode_rho != hardcode_sigma_v) & block_v_rho) 
+#     stop("One of rho and sigma_v is hardcoded, but ablock update was specified")
+#   x_c = matrix(x_control, ncol = ncol(x_control))
+#   x_m = matrix(x_moderate, ncol = ncol(x_moderate))
+#   if (include_pi == "both" | include_pi == "control") {
+#     x_c = cbind(x_control, pihat)
+#   }
+#   if (include_pi == "both" | include_pi == "moderate") {
+#     x_m = cbind(x_moderate, pihat)
+#   }
+#   cutpoint_list_c = lapply(1:ncol(x_c), function(i) .cp_quantile(x_c[, 
+#                                                                      i]))
+#   cutpoint_list_m = lapply(1:ncol(x_m), function(i) .cp_quantile(x_m[, 
+#                                                                      i]))
+#   sdy = sqrt(Hmisc::wtd.var(y, w))
+#   muy = stats::weighted.mean(y, w)
+#   yscale = (y - muy)/sdy
+#   if (is.null(lambda)) {
+#     if (is.null(sighat)) {
+#       lmf = lm(yscale ~ z + as.matrix(x_c), weights = w)
+#       sighat = summary(lmf)$sigma
+#     }
+#     qchi = qchisq(1 - sigq, nu)
+#     lambda = (sighat * sighat * qchi)/nu
+#   }
+#   if (is.null(sd_control)) {
+#     con_sd <- 2
+#   }
+#   else {
+#     con_sd = sd_control/sdy
+#   }
+#   if (is.null(sd_moderate)) {
+#     mod_sd <- 1/ifelse(use_tauscale, 0.674, 1)
+#   }
+#   else {
+#     mod_sd = sd_moderate/sdy/ifelse(use_tauscale, 0.674, 
+#                                     1)
+#   }
+#   hardcode_sigma_u_val <- hardcode_sigma_u_val/sdy
+#   hardcode_sigma_v_val <- hardcode_sigma_v_val/sdy
+#   if (is.null(sigu_hyperprior)) {
+#     sigu_hyperprior <- con_sd/3
+#   }
+#   else {
+#     sigu_hyperprior <- sigu_hyperprior/sdy/0.674
+#   }
+#   if (include_random_effects && is.null(ate_prior_sd)) {
+#     stop("a prior SD for the ATE (ate_prior_sd) is required for iBCF")
+#   }
+#   else if (include_random_effects) {
+#     ate_prior_sd <- ate_prior_sd/sdy
+#   }
+#   else {
+#     ate_prior_sd <- 1
+#   }
+#   dir = tempdir()
+#   perm = order(z, decreasing = TRUE)
+#   RcppParallel::setThreadOptions(numThreads = n_threads)
+#   do_type_config <- .get_do_type(n_cores, log_file)
+#   `%doType%` <- do_type_config$doType
+#   chain_out <- foreach::foreach(iChain = 1:n_chains) %doType% 
+#     {
+#       this_seed = random_seed + iChain - 1
+#       cat("Calling bcfoverparRcppClean From R\n")
+#       set.seed(this_seed)
+#       tree_files = .get_chain_tree_files(save_tree_directory, 
+#                                          iChain)
+#       fitbcf = bcfoverparRcppClean(y_ = yscale[perm], 
+#                                    z_ = z[perm], w_ = w[perm], x_con_ = t(x_c[perm, 
+#                                                                               , drop = FALSE]), x_mod_ = t(x_m[perm, , drop = FALSE]), 
+#                                    x_con_info_list = cutpoint_list_c, x_mod_info_list = cutpoint_list_m, 
+#                                    burn = nburn, nd = nsim, thin = nthin, ntree_mod = ntree_moderate, 
+#                                    ntree_con = ntree_control, lambda = lambda, 
+#                                    nu = nu, con_sd = con_sd, mod_sd = mod_sd, mod_alpha = base_moderate, 
+#                                    mod_beta = power_moderate, con_alpha = base_control, 
+#                                    con_beta = power_control, treef_con_name_ = tree_files$con_trees, 
+#                                    treef_mod_name_ = tree_files$mod_trees, status_interval = update_interval, 
+#                                    use_mscale = use_muscale, use_bscale = use_tauscale, 
+#                                    b_half_normal = TRUE, randeff = include_random_effects, 
+#                                    batch_size = batch_size, acceptance_target = 0.44, 
+#                                    verbose = verbose, block_v_rho = block_v_rho, 
+#                                    block_batch_size = block_batch_size, block_b0_b1 = block_b0_b1, 
+#                                    sigu_hyperprior = sigu_hyperprior, ate_prior_sd = ate_prior_sd, 
+#                                    hardcode_sigma_u = hardcode_sigma_u, hardcode_sigma_v = hardcode_sigma_v, 
+#                                    hardcode_rho = hardcode_rho, hardcode_sigma_u_val = hardcode_sigma_u_val, 
+#                                    hardcode_sigma_v_val = hardcode_sigma_v_val, 
+#                                    hardcode_rho_val = hardcode_rho_val, rho_beta_prior = rho_beta_prior, 
+#                                    rho_beta_a = rho_beta_a, rho_beta_b = rho_beta_b)
+#       cat("bcfoverparRcppClean returned to R\n")
+#       ac = fitbcf$m_post[, order(perm)]
+#       Tm = fitbcf$b_post[, order(perm)] * (1/(fitbcf$b1 - 
+#                                                 fitbcf$b0))
+#       Tc = ac * (1/fitbcf$msd)
+#       tau_post = sdy * fitbcf$b_post[, order(perm)]
+#       mu_post = muy + sdy * (Tc * fitbcf$msd + Tm * fitbcf$b0)
+#       yhat_post = muy + sdy * fitbcf$yhat_post[, order(perm)]
+#       u_post = sdy * fitbcf$u[, order(perm)]
+#       v_post = sdy * fitbcf$v[, order(perm)]
+#       if (include_random_effects) {
+#         tau_post <- tau_post + v_post
+#         mu_post <- mu_post + u_post
+#         yhat_post <- yhat_post + u_post + t(t(v_post) * 
+#                                               z)
+#       }
+#       sigma_i = sdy * fitbcf$sigma_i[, order(perm)]
+#       names(fitbcf$acceptance) = c("sigma_y", "sigma_u", 
+#                                    "sigma_v", "rho")
+#       list(sigma_y = sdy * fitbcf$sigma_y, sigma_u = sdy * 
+#              fitbcf$sigma_u, sigma_v = sdy * fitbcf$sigma_v, 
+#            rho = fitbcf$rho, sigma_i = sigma_i, yhat = yhat_post, 
+#            sdy = sdy, con_sd = con_sd, mod_sd = mod_sd, 
+#            muy = muy, mu = mu_post, tau = tau_post, u = u_post, 
+#            v = v_post, mu_scale = fitbcf$msd, tau_scale = fitbcf$bsd, 
+#            b0 = fitbcf$b0, b1 = fitbcf$b1, delta_mu = fitbcf$delta_con, 
+#            acceptance = fitbcf$acceptance, perm = perm, 
+#            include_pi = include_pi, include_random_effects = include_random_effects, 
+#            random_seed = this_seed)
+#     }
+#   if (!include_random_effects) {
+#     chain_out <- lapply(chain_out, function(x) {
+#       x$sigma <- x$sigma_y
+#       x$sigma_y <- x$sigma_a <- x$sigma_b <- x$sigma_v <- x$rho <- x$sigma_i <- x$u <- x$v <- x$acceptance <- x$acc_sigv <- x$mux <- x$taux <- NULL
+#       return(x)
+#     })
+#   }
+#   fitObj <- list(raw_chains = chain_out)
+#   if (!simplified_return) {
+#     fitObj <- c(fitObj, list(coda_chains = .extract_coda_chains(chain_out)), 
+#                 .get_components_from_chains(chain_out))
+#   }
+#   attr(fitObj, "class") <- "bcf"
+#   .cleanup_after_par(do_type_config)
+#   return(fitObj)
+# }
+
 # Modified fns from acic_bcf.r --------------------------------------------
 
 make_bcf_dataset <- function(dataset, pscores, weights=NULL, splityear=FALSE, dir=compdir) {
